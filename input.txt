@@ -1,2 +1,0 @@
-NullPointerException in the Java package viewer UI
-exit

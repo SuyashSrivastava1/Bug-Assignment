@@ -1,94 +1,151 @@
-# Bug-to-Developer Assignment Framework
+# Bug-to-Developer Assignment System
 
-This project contains a Python implementation of an AI-driven, Multi-Criteria Decision Making (MCDM) framework designed to automate the assignment of software bugs to the optimal developers.
+An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of NLP (TF-IDF + KNN) and Multi-Criteria Decision Making (MCDM).
 
-## Overview
-The system relies on a hybrid pipeline that bridges semantic Natural Language Processing (NLP) with deterministic operational research models. It evaluates developers dynamically based on historical data, bug context, and team constraints to mathematically determine the best developer for a specific issue.
+## Quick Start
 
-## Core Algorithm Steps
-1. **Feature Extraction (NLP):** When a new bug is reported, its text is converted into a feature vector using TF-IDF Vectorization.
-2. **Historical Similarity Search (KNN):** Cosine Similarity is used to find the top $K$ most similar historical bugs.
-3. **Candidate Identification & Hard Filtering:** The developers who resolved the top $K$ similar bugs are identified. Developers on leave or over a 95% workload threshold are filtered out.
-4. **Attribute Matrix Generation:** Candidates are evaluated on Experience (Benefit), Success Rate (Benefit), Domain Skill (Benefit), Fix Time (Cost), and Workload (Cost).
-5. **Dynamic Contextual AI Weighting:** Weights are dynamically assigned based on bug severity (e.g., Critical bugs prioritize speed and skill, while Minor bugs prioritize low workload).
-6. **Normalization and WSM Calculation:** Metrics are normalized to a `[0, 1]` scale using Min-Max scaling. The Weighted Sum Model (WSM) computes the final Utility Score.
-7. **Ranking and Assignment:** Developers are ranked descending by Utility Score to find the mathematical optimum assignment.
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+You will be prompted to choose a mode:
+
+| Mode | What you provide | What it does |
+|---|---|---|
+| **1 — GitHub URL** | A GitHub issue URL | Fetches the bug + the repo's full contributor history, then assigns the bug to the best developer from that project |
+| **2 — Custom description** | Plain text | Uses the offline Eclipse dataset as training context and assigns the bug to the closest matching Eclipse developer |
+
+### Example — GitHub Mode
+
+```
+> 1
+Paste a GitHub issue URL:
+> https://github.com/facebook/react/issues/36469
+
+[1/3] Fetching issue #36469 from facebook/react...
+[2/3] Building developer pool from facebook/react history...
+[3/3] Finding best developer...
+--------------------------------------------------
+  BEST MATCH : eps1lon
+  Score      : 1.000
+  Bugs Fixed : 5
+  Avg Fix    : 11.5 hours
+
+  Other Candidates:
+    - rickhanlonii                   score=0.800  bugs_fixed=1
+    - gnoff                          score=0.762  bugs_fixed=1
+```
+
+### Example — Custom Mode
+
+```
+> 2
+> NullPointerException in the Java package viewer UI
+
+  BEST MATCH : Tod Creasey
+  Score      : 0.693
+  Bugs Fixed : 459
+  Avg Fix    : 2053.7 hours
+```
 
 ---
 
-## The Code Structure
+## How the Algorithm Works
 
-There are three ways to run and test this algorithm depending on the data source you want to use.
+### 7-Step Pipeline
 
-### 1. The Core Algorithm (Mock Data)
-**File:** `bug_assigner.py`
-This is the core logic file. When run directly, it executes a simple test using hard-coded mock data (5 developers and 5 historical bugs). It is useful for understanding the exact flow of the algorithm without needing external data.
-```bash
-python bug_assigner.py
+```
+New Bug Report
+      │
+      ▼
+1. TF-IDF Vectorisation  ←── Convert bug description text into a numeric feature vector
+      │
+      ▼
+2. KNN Similarity Search ←── Find the top-K most similar bugs in the historical database
+      │
+      ▼
+3. Candidate Extraction  ←── Identify the developers who fixed those similar bugs
+      │
+      ▼
+4. Hard Filtering        ←── Remove developers who are on leave or over 95% workload
+      │
+      ▼
+5. Attribute Matrix      ←── Build a matrix of 5 performance metrics for each candidate
+      │
+      ▼
+6. Dynamic Weighting     ←── Assign criteria weights based on bug severity
+      │
+      ▼
+7. WSM + Ranking         ←── Normalise, compute utility scores, return ranked list
 ```
 
-### 2. The Kaggle Dataset Pipeline (Real-World CSV Data)
-**File:** `csv_pipeline.py`
-This script is specifically configured to load the **Eclipse Bug Triaging Dataset** downloaded from Kaggle (`archive/final dataset for work ecllipse.csv`). 
+### The 5 Developer Metrics
 
-**What it does:**
-* It parses the Kaggle CSV, extracting `Bug ID`, `Assignee Real Name`, and computes fix times using the `Opened` and `Changed` timestamps.
-* It loads all 10,000 bugs from the Eclipse dataset.
-* It trains the AI's "Historical Knowledge" on the first 8,000 bugs.
-* It then tests the algorithm's assignment predictions on the remaining 2,000 test bugs.
+| Metric | Type | Source |
+|---|---|---|
+| **Experience** | Benefit ↑ | Total bugs historically fixed |
+| **Fix Time** | Cost ↓ | Average hours to close a bug |
+| **Success Rate** | Benefit ↑ | % of bugs not re-opened |
+| **Workload** | Cost ↓ | Current open issue load (0–100%) |
+| **Domain Skill** | Benefit ↑ | Number of distinct components worked on |
 
-**How to run it:**
-```bash
-python csv_pipeline.py
+### Dynamic Weights by Severity
+
+| Severity | Experience | Fix Time | Success Rate | Workload | Domain Skill |
+|---|---|---|---|---|---|
+| **Critical** | 0.10 | **0.40** | 0.10 | 0.10 | **0.30** |
+| **Normal** | 0.20 | 0.20 | 0.20 | 0.20 | 0.20 |
+| **Minor** | 0.10 | 0.10 | 0.10 | **0.60** | 0.10 |
+
+Critical bugs prioritise **speed** and **expertise**. Minor bugs prioritise assigning to the least busy developer.
+
+### Why GitHub + Eclipse Together?
+
+When routing a GitHub bug, the system uses:
+- **Eclipse (10,000 bugs)** — as *NLP context only*. This gives the TF-IDF model a much richer vocabulary for understanding technical bug descriptions.
+- **GitHub repo history** — as the *candidate pool*. Only developers who actually work on that specific project can be assigned.
+
+This means the AI is smarter (Eclipse context) but always practical (only real contributors are recommended).
+
+---
+
+## Project Structure
+
 ```
-
-### 3. The Live GitHub Pipeline (Real-Time API Data)
-**File:** `github_pipeline.py`
-This script queries the actual GitHub REST API to pull the 100 most recently closed bugs from the massive **Microsoft VS Code** repository (`microsoft/vscode`).
-
-**What it does:**
-* Hits the live GitHub API (no CSV required).
-* Filters out pull requests and extracts labels, titles, descriptions, and assignees.
-* Trains the AI on the first 80 bugs and tests the assignment on the remaining 20 bugs.
-* Prints out the AI's optimal developer choices and compares them to the developer who *actually* fixed the bug in reality.
-
-**How to run it:**
-```bash
-python github_pipeline.py
-```
-
-### 4. The Unified Pipeline (Mixed Multi-Dataset Training)
-**File:** `unified_pipeline.py`
-This script demonstrates the ultimate scale of the Bug Assigner AI by training it simultaneously on **multiple massive, completely distinct datasets**. 
-
-**What it does:**
-* Loads all 10,000 bugs from the offline Eclipse CSV.
-* Concurrently fetches live recent bugs from the VS Code GitHub API.
-* Merges everything into a massive pool of 10,000+ historical bugs and hundreds of unique developers.
-* Accepts a brand-new, completely custom bug report and routes it to the absolute best developer out of the entire global pool.
-
-**How to run it:**
-```bash
-python unified_pipeline.py
-```
-
-### 5. The Interactive Command Line (No Dummy Data)
-**File:** `interactive_cli.py`
-This script gives you an interactive prompt where you can type in your own custom bug descriptions and instantly get assigned a real developer.
-
-**What it does:**
-* It completely removes all randomized/dummy metrics (setting missing data to neutral baselines).
-* It trains the AI on all 10,000 real Eclipse bugs.
-* It pauses and asks you to type in a bug description.
-* It evaluates your exact text and tells you exactly which real Eclipse developer is best suited to fix it based strictly on their actual historical track record.
-
-**How to run it:**
-```bash
-python interactive_cli.py
+Bug Classification/
+│
+├── src/                        # All source code
+│   ├── models/
+│   │   ├── bug.py              # Bug data class
+│   │   ├── developer.py        # Developer data class (with all 5 metrics)
+│   │   └── assigner.py         # Core KNN + WSM algorithm
+│   │
+│   ├── loaders/
+│   │   ├── base.py             # Shared: map_severity(), build_developers()
+│   │   ├── csv_loader.py       # Load from Eclipse/Kaggle CSV
+│   │   └── github_loader.py    # Load from GitHub REST API (issues + PRs)
+│   │
+│   └── router.py               # Pipeline coordinator
+│
+├── archive/
+│   └── final dataset for work ecllipse.csv
+│
+├── main.py                     # Entry point — run this
+├── requirements.txt
+└── README.md
 ```
 
 ## Requirements
-To run any of the scripts, ensure you have the required dependencies installed:
-```bash
-pip install numpy scikit-learn
+
 ```
+numpy
+scikit-learn
+```
+
+Install with:
+```bash
+pip install -r requirements.txt
+```
+
+No API keys are required. The GitHub API is used anonymously (rate limit: 60 requests/hour).
