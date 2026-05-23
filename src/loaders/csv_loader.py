@@ -1,9 +1,9 @@
 """
 src/loaders/csv_loader.py
 
-Loads historical bug data from a local CSV file (e.g. Eclipse / Kaggle dataset).
+Loads historical bug data from a local CSV file (Eclipse Bug Triaging dataset).
 
-Expected CSV columns (based on the Eclipse Bug Triaging dataset from Kaggle):
+Expected CSV columns:
     Bug ID, Summary, Severity, Component, Assignee Real Name, Opened, Changed
 
 Returns
@@ -20,7 +20,7 @@ from src.models.bug import Bug
 from src.loaders.base import map_severity
 
 # Default path relative to the project root
-DEFAULT_CSV_PATH = Path("archive") / "final dataset for work ecllipse.csv"
+DEFAULT_CSV_PATH = Path("data") / "eclipse" / "final dataset for work ecllipse.csv"
 
 
 def load(filepath: str | Path = DEFAULT_CSV_PATH) -> tuple[list[Bug], dict]:

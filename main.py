@@ -12,8 +12,8 @@ Two modes (chosen interactively at startup):
 
   2. Custom Mode
      Type a plain-English bug description.  The system uses the offline
-     Eclipse dataset as training context and returns the best-matching
-     Eclipse developer.
+     Eclipse + Bugzilla datasets as NLP training context and returns the
+     best-matching Eclipse developer.
 
 Usage
 -----
@@ -119,7 +119,7 @@ def run_github_mode():
 
 def run_custom_mode():
     print(f"\n{DIVIDER}")
-    print("The system will use the offline Eclipse dataset for matching.")
+    print("The system will use the offline Eclipse + Bugzilla datasets for matching.")
     print("Type your bug description (press Enter twice to submit):")
     print("> ", end="", flush=True)
 
@@ -140,7 +140,7 @@ def run_custom_mode():
 
     bug = Bug(id=0, description=description, severity=severity, module="general")
 
-    print("\n[1/2] Training on offline Eclipse dataset...")
+    print("\n[1/2] Training on Eclipse + Bugzilla context datasets...")
     router = Router()
     router.train_from_csv()
 

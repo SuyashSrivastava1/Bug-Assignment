@@ -14,7 +14,7 @@ You will be prompted to choose a mode:
 | Mode | What you provide | What it does |
 |---|---|---|
 | **1 — GitHub URL** | A GitHub issue URL | Fetches the bug + the repo's full contributor history, then assigns the bug to the best developer from that project |
-| **2 — Custom description** | Plain text | Uses the offline Eclipse dataset as training context and assigns the bug to the closest matching developer |
+| **2 — Custom description** | Plain text | Uses the offline Eclipse + Bugzilla datasets as NLP training context and assigns the bug to the closest matching Eclipse developer |
 
 ---
 
@@ -132,14 +132,17 @@ Three NLP signals are extracted from the bug description:
 
 This means two bugs with the same severity label get different weights if their descriptions differ. A *"production database deadlock crash"* and a *"production crash on the login page"* are both `critical` but will correctly receive different weight distributions.
 
-### Why GitHub + Eclipse Together?
+### Why Eclipse + Bugzilla + GitHub Together?
 
-When routing a GitHub bug, the system uses two data sources:
+When routing a GitHub bug, the system uses **three data sources**:
 
-- **Eclipse dataset (10,000 bugs)** — as *NLP context only*. This gives the TF-IDF model a much richer vocabulary for understanding technical bug descriptions, improving similarity search accuracy.
-- **GitHub repo history** — as the *candidate pool*. Only developers who actually work on that specific project can ever be assigned.
+| Source | Role | Size |
+|---|---|---|
+| **Eclipse dataset** (`data/eclipse/`) | NLP context — enriches TF-IDF vocabulary with structured bug reports | ~10,000 bugs |
+| **Bugzilla corpus** (`data/bugzilla/`) | NLP context — adds 35,000+ diverse open-source bug descriptions from 50+ projects | ~35,000+ entries |
+| **GitHub repo history** | Candidate pool — the **only** source of actual developers | Project-specific |
 
-This means the AI is **smarter** (Eclipse NLP context) but always **practical** (only real project contributors are recommended).
+The NLP context sources improve similarity matching without ever adding Eclipse or Bugzilla developers to the candidate pool. Only real contributors from the target GitHub project are ever recommended.
 
 ---
 
@@ -179,10 +182,17 @@ Bug Classification/
 │   │
 │   ├── loaders/
 │   │   ├── base.py             # Shared utilities: map_severity(), build_developers()
-│   │   ├── csv_loader.py       # Load from Eclipse/Kaggle CSV dataset
+│   │   ├── csv_loader.py       # Load from Eclipse CSV dataset
+│   │   ├── bugzilla_loader.py  # Load from Bugzilla corpus .txt (NLP context only)
 │   │   └── github_loader.py    # Load from GitHub REST API (issues + PRs)
 │   │
 │   └── router.py               # Pipeline coordinator: ties all components together
+│
+├── data/                       # Local datasets (gitignored — download separately)
+│   ├── eclipse/
+│   │   └── final dataset for work ecllipse.csv   # kaggle.com/datasets/ehsanb/eclipse-bug-reports
+│   └── bugzilla/
+│       └── corpus (fixsev).txt                   # kaggle.com/datasets/qicongliu/bugzilla-bug-reports
 │
 ├── documentation/              # Reference research papers
 ├── main.py                     # Entry point — run this
@@ -190,6 +200,16 @@ Bug Classification/
 ├── requirements.txt
 └── README.md
 ```
+
+## Adding More NLP Context Datasets
+
+The system is designed to accept additional NLP context datasets with minimal code changes.  To add a new source:
+
+1. Write a loader in `src/loaders/` that returns `(list[Bug], {})` (empty dev_stats).
+2. Call it inside `Router._load_nlp_context()` in `src/router.py` and append to `context_bugs`.
+3. The TF-IDF model will automatically incorporate the new vocabulary.
+
+No changes to the algorithm, weights, or candidate pool logic are needed.
 
 ## Requirements
 
@@ -203,4 +223,10 @@ Install with:
 pip install -r requirements.txt
 ```
 
-No API keys required. The GitHub API is used anonymously (rate limit: 60 requests/hour). The Eclipse dataset CSV must be placed at `archive/final dataset for work ecllipse.csv` for CSV mode and accuracy evaluation to work.
+No API keys required. The GitHub API is used anonymously (rate limit: 60 requests/hour).
+
+**Dataset setup** — place the following files before running CSV/accuracy tests:
+- `data/eclipse/final dataset for work ecllipse.csv` — [Eclipse Bug Reports on Kaggle](https://kaggle.com/datasets/ehsanb/eclipse-bug-reports)
+- `data/bugzilla/corpus (fixsev).txt` — [Bugzilla Bug Reports on Kaggle](https://kaggle.com/datasets/qicongliu/bugzilla-bug-reports)
+
+Both datasets are optional — the system degrades gracefully if either file is missing.

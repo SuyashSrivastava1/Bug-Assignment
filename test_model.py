@@ -249,9 +249,9 @@ test("Edge: single developer is returned as best", best_s is not None and best_s
 # SECTION 3 — Loader Tests
 # ===========================================================================
 
-section("3. Loader Tests — CSV")
+section("3a. Loader Tests — Eclipse CSV")
 
-CSV_PATH = Path("archive") / "final dataset for work ecllipse.csv"
+CSV_PATH = Path("data") / "eclipse" / "final dataset for work ecllipse.csv"
 
 if not CSV_PATH.exists():
     skip("CSV load: file exists",         f"Not found at {CSV_PATH}")
@@ -274,6 +274,49 @@ else:
     test("CSV load: all severities are valid",
          all(b.severity in ("critical", "normal", "minor") for b in csv_bugs))
     info(f"Loaded {len(csv_bugs):,} bugs and {len(csv_dev_stats):,} developers in {elapsed:.2f}s")
+
+
+# ===========================================================================
+# SECTION 3b — Loader Tests: Bugzilla corpus
+# ===========================================================================
+
+section("3b. Loader Tests — Bugzilla Corpus")
+
+from src.loaders.bugzilla_loader import load as bugzilla_load, DEFAULT_BUGZILLA_PATH
+
+# Always test: missing file must never crash the pipeline
+bzl_missing_bugs, bzl_missing_devs = bugzilla_load(Path("nonexistent_path_xyz.txt"))
+test("Bugzilla: missing file returns empty list (no crash)",
+     isinstance(bzl_missing_bugs, list) and len(bzl_missing_bugs) == 0)
+test("Bugzilla: missing file returns empty dev_stats",
+     isinstance(bzl_missing_devs, dict) and len(bzl_missing_devs) == 0)
+
+if not DEFAULT_BUGZILLA_PATH.exists():
+    skip("Bugzilla load: file present",           f"Not found at {DEFAULT_BUGZILLA_PATH}")
+    skip("Bugzilla load: returns > 0 bugs",       "Skipped — corpus not downloaded")
+    skip("Bugzilla load: dev_stats always empty", "Skipped — corpus not downloaded")
+    skip("Bugzilla load: all descriptions non-empty", "Skipped — corpus not downloaded")
+    skip("Bugzilla load: all severities valid",   "Skipped — corpus not downloaded")
+    skip("Bugzilla load: bug ids are unique",      "Skipped — corpus not downloaded")
+    bzl_bugs = None
+else:
+    t0 = time.time()
+    bzl_bugs, bzl_devs = bugzilla_load(DEFAULT_BUGZILLA_PATH)
+    elapsed_bzl = time.time() - t0
+
+    test("Bugzilla load: file parses without error", True)
+    test("Bugzilla load: returns > 0 bugs",
+         len(bzl_bugs) > 0, f"Got {len(bzl_bugs)}")
+    test("Bugzilla load: dev_stats is always empty (context-only)",
+         len(bzl_devs) == 0)
+    test("Bugzilla load: all descriptions non-empty",
+         all(b.description.strip() for b in bzl_bugs))
+    test("Bugzilla load: all severities valid",
+         all(b.severity in ("critical", "normal", "minor") for b in bzl_bugs))
+    all_ids = [b.id for b in bzl_bugs]
+    test("Bugzilla load: bug ids are unique",
+         len(all_ids) == len(set(all_ids)))
+    info(f"Loaded {len(bzl_bugs):,} Bugzilla bug descriptions in {elapsed_bzl:.2f}s")
 
 
 # ===========================================================================

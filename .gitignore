@@ -1,4 +1,21 @@
 __pycache__/
 *.pyc
+
+# Legacy archive folder (replaced by data/)
 archive/
 archive.zip
+
+# Bugzilla dataset downloaded at root level (user extracted here)
+bugzilla/
+bugzilla.zip
+
+# Local data files — too large for git
+# Download these manually and place at the paths below:
+#
+#   data/eclipse/final dataset for work ecllipse.csv
+#       Source: kaggle.com/datasets/ehsanb/eclipse-bug-reports
+#
+#   data/bugzilla/corpus (fixsev).txt
+#       Source: kaggle.com/datasets/qicongliu/bugzilla-bug-reports
+#
+data/
