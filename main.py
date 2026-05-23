@@ -59,7 +59,7 @@ def print_result(best_dev, rankings, weights=None, signals=None):
 
     if weights is not None:
         print(f"\n  [Computed Weights for this Bug]")
-        labels = ["Experience", "Fix Time", "Success Rate", "Workload", "Domain Skill"]
+        labels = ["Experience", "Fix Time", "Success Rate", "Workload", "Domain Skill", "KNN Affinity"]
         for label, w in zip(labels, weights):
             bar = int(w * 30)
             print(f"  {label:<14} {w:.3f}  {'#' * bar}")

@@ -134,7 +134,7 @@ new_bug = Bug(200, "crash when logging in as admin user", "critical", "auth")
 best, rankings, weights, signals = assigner.assign(new_bug, k=3)
 test("BugAssigner: assign() returns a developer",    best is not None)
 test("BugAssigner: rankings is a non-empty list",    len(rankings) > 0)
-test("BugAssigner: weights are returned",            weights is not None and len(weights) == 5)
+test("BugAssigner: weights are returned",            weights is not None and len(weights) == 6)
 test("BugAssigner: weights sum to 1.0",              abs(float(weights.sum()) - 1.0) < 1e-6)
 test("BugAssigner: signals dict is returned",        isinstance(signals, dict) and "urgency_score" in signals)
 test("BugAssigner: best dev is top of rankings",     rankings[0][0].name == best.name)
@@ -385,7 +385,7 @@ else:
             no_assignment += 1
             continue
 
-        best, rankings, _, _ = assigner_eval.assign(bug, k=5)
+        best, rankings, _, _ = assigner_eval.assign(bug, k=20)
         if best is None:
             no_assignment += 1
             continue
