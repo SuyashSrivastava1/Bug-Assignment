@@ -40,6 +40,7 @@ signal — it does NOT pick from a fixed table.
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from src.models.bug import Bug
@@ -174,9 +175,16 @@ class BugAssigner:
 
     def __init__(self):
         # Semantic embeddings using SentenceTransformers
-        self._model = SentenceTransformer("all-MiniLM-L6-v2")
+        self._dense_model = SentenceTransformer("all-MiniLM-L6-v2")
+        self._sparse_model = TfidfVectorizer(
+            stop_words="english",
+            max_df=0.8,
+            min_df=1,
+            ngram_range=(1, 2)
+        )
         self._historical_bugs: list[Bug] = []
-        self._historical_vectors = None          # dense numpy array
+        self._historical_dense = None            # dense numpy array
+        self._historical_sparse = None           # sparse CSR matrix
         self._developers: list[Developer] = []
         self._resolutions: dict = {}             # bug_id -> developer_id
 
@@ -222,9 +230,10 @@ class BugAssigner:
             self._dev_bug_indices[dev_id].append(idx)
             self._dev_components[dev_id].add(bug.module)
 
-        # Encode corpus to dense embeddings
+        # Encode corpus to dense embeddings and sparse TF-IDF vectors
         corpus = [bug.description for bug in historical_bugs]
-        self._historical_vectors = self._model.encode(corpus, show_progress_bar=False)
+        self._historical_dense = self._dense_model.encode(corpus, show_progress_bar=False)
+        self._historical_sparse = self._sparse_model.fit_transform(corpus)
 
     # ------------------------------------------------------------------
     # Inference
@@ -251,15 +260,20 @@ class BugAssigner:
 
         Returns (None, [], None, {}) if no assignment can be made.
         """
-        if self._historical_vectors is None:
+        if self._historical_dense is None or self._historical_sparse is None:
             raise RuntimeError("BugAssigner has not been trained yet. Call fit() first.")
 
-        # Step 1 — Feature Extraction (dense semantic embedding)
-        new_vector = self._model.encode([new_bug.description])
+        # Step 1 — Feature Extraction (dense semantic + sparse lexical)
+        new_dense = self._dense_model.encode([new_bug.description])
+        new_sparse = self._sparse_model.transform([new_bug.description])
 
-        # Step 2 — KNN Similarity Search across all historical bugs
-        # cosine_similarity handles dense arrays properly.
-        similarities = cosine_similarity(new_vector, self._historical_vectors)[0]
+        # Step 2 — Hybrid Similarity Search
+        # Combine dense semantic similarity with sparse lexical exact-matching
+        sim_dense = cosine_similarity(new_dense, self._historical_dense)[0]
+        sim_sparse = cosine_similarity(new_sparse, self._historical_sparse)[0]
+        
+        # Hybrid score weights both models equally
+        similarities = (sim_dense * 0.5) + (sim_sparse * 0.5)
         top_k_indices = similarities.argsort()[-k:][::-1]
 
         # Step 3 — Candidate Extraction from the top-K similar bugs

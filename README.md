@@ -151,13 +151,18 @@ The NLP context sources improve semantic matching without ever adding Eclipse or
 Evaluated on an 80/20 train/test split of the Eclipse dataset (9,800 train / 2,000 test bugs, 209 developers):
 
 | Metric | Score |
-|---|---|
-| **Top-1 Accuracy** | 22.50% |
-| **Top-3 Accuracy** | 48.50% |
-| **Top-5 Accuracy** | 63.50% |
-| **Mean Reciprocal Rank (MRR)** | 0.389 |
+| :--- | :--- |
+| **Top-1 Accuracy** | 23.00% |
+| **Top-3 Accuracy** | 47.50% |
+| **Top-5 Accuracy** | 63.00% |
+| **Mean Reciprocal Rank (MRR)** | 0.397 |
 
-> **What these mean:** Top-5 accuracy of 63.50% means the correct developer appears in the AI's top 5 recommendations more than 60% of the time. In practice, giving a project manager a ranked shortlist of 3-5 candidates is highly effective.
+*What these mean: Top-5 accuracy of 63.00% means that 63% of the time, the correct developer who actually fixed the bug was ranked in the top 5 candidates suggested by the model.*
+
+## Architecture
+
+1. **Feature Extraction (Hybrid NLP)**: Bug descriptions are embedded using **both** a dense semantic model (`SentenceTransformers: all-MiniLM-L6-v2`) and a sparse lexical model (`TfidfVectorizer`). This hybrid approach combines deep semantic meaning with exact keyword matching.
+2. **Hybrid KNN Search**: We find the K=20 most similar historical bugs by blending cosine similarities from both models.
 
 Run the evaluation yourself:
 

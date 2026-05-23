@@ -128,7 +128,7 @@ devs = [
 resolutions = {101: 1, 102: 2, 103: 1}
 
 assigner.fit(bugs_train, devs, resolutions)
-test("BugAssigner: fit() completes without error", assigner._historical_vectors is not None)
+test("BugAssigner: fit() completes without error", assigner._historical_dense is not None)
 
 new_bug = Bug(200, "crash when logging in as admin user", "critical", "auth")
 best, rankings, weights, signals = assigner.assign(new_bug, k=3)
