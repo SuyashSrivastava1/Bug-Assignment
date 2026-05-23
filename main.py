@@ -39,7 +39,7 @@ def print_header():
     print("=" * 50)
 
 
-def print_result(best_dev, rankings, weights=None):
+def print_result(best_dev, rankings, weights=None, signals=None):
     if not best_dev:
         print("\n[ERROR] No assignment could be made.")
         print("  Possible reasons:")
@@ -47,9 +47,22 @@ def print_result(best_dev, rankings, weights=None):
         print("  - The repository may not use assignees or PRs.")
         return
 
+    if signals:
+        print(f"\n  [NLP Signals Detected]")
+        print(f"  Urgency    : {signals['urgency_score']:.2f}"  +
+              (f"  ({', '.join(signals['urgency_keywords'][:4])})" if signals['urgency_keywords'] else ""))
+        print(f"  Complexity : {signals['complexity_score']:.2f}" +
+              (f"  ({', '.join(signals['complexity_keywords'][:4])})" if signals['complexity_keywords'] else ""))
+        print(f"  Routine    : {signals['routine_score']:.2f}"  +
+              (f"  ({', '.join(signals['routine_keywords'][:4])})" if signals['routine_keywords'] else ""))
+        print(f"  Severity   : {signals['severity_score']:.2f}  Effective Urgency: {signals['effective_urgency']:.2f}")
+
     if weights is not None:
-        print(f"\n  [Dynamic AI Weights Used] :")
-        print(f"  Exp: {weights[0]:.2f} | FixTime: {weights[1]:.2f} | Success: {weights[2]:.2f} | Workload: {weights[3]:.2f} | Domain: {weights[4]:.2f}")
+        print(f"\n  [Computed Weights for this Bug]")
+        labels = ["Experience", "Fix Time", "Success Rate", "Workload", "Domain Skill"]
+        for label, w in zip(labels, weights):
+            bar = int(w * 30)
+            print(f"  {label:<14} {w:.3f}  {'#' * bar}")
 
     print(f"\n  BEST MATCH : {best_dev.name}")
     print(f"  Score      : {rankings[0][1]:.3f}")
@@ -96,8 +109,8 @@ def run_github_mode():
 
     print(f"\n[3/3] Finding best developer...")
     print(DIVIDER)
-    best_dev, rankings, weights = router.assign(bug, k=5)
-    print_result(best_dev, rankings, weights)
+    best_dev, rankings, weights, signals = router.assign(bug, k=5)
+    print_result(best_dev, rankings, weights, signals)
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +146,8 @@ def run_custom_mode():
 
     print("\n[2/2] Finding best developer...")
     print(DIVIDER)
-    best_dev, rankings, weights = router.assign(bug, k=5)
-    print_result(best_dev, rankings, weights)
+    best_dev, rankings, weights, signals = router.assign(bug, k=5)
+    print_result(best_dev, rankings, weights, signals)
 
 
 # ---------------------------------------------------------------------------

@@ -122,9 +122,11 @@ class Router:
 
         Returns
         -------
-        (best_developer, ranked_list, weights)
+        (best_developer, ranked_list, weights, signals)
         ranked_list is a list of (Developer, score) tuples sorted best-first.
-        Returns (None, [], None) if no assignment can be made.
+        weights is the per-bug dynamic weight vector (unique for every bug).
+        signals is a dict of the NLP signals that drove the weights.
+        Returns (None, [], None, {}) if no assignment can be made.
         """
         if not self._trained:
             raise RuntimeError("Router has not been trained. Call train_from_github() or train_from_csv() first.")

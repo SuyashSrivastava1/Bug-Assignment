@@ -90,7 +90,7 @@ section("1. Unit Tests — Models")
 
 from src.models.bug import Bug
 from src.models.developer import Developer
-from src.models.assigner import BugAssigner, WEIGHTS
+from src.models.assigner import BugAssigner, compute_dynamic_weights
 
 # Bug
 b = Bug(id=1, description="App crashes on startup", severity="CRITICAL", module="core")
@@ -131,22 +131,76 @@ assigner.fit(bugs_train, devs, resolutions)
 test("BugAssigner: fit() completes without error", assigner._historical_vectors is not None)
 
 new_bug = Bug(200, "crash when logging in as admin user", "critical", "auth")
-best, rankings, weights = assigner.assign(new_bug, k=3)
+best, rankings, weights, signals = assigner.assign(new_bug, k=3)
 test("BugAssigner: assign() returns a developer",    best is not None)
 test("BugAssigner: rankings is a non-empty list",    len(rankings) > 0)
 test("BugAssigner: weights are returned",            weights is not None and len(weights) == 5)
 test("BugAssigner: weights sum to 1.0",              abs(float(weights.sum()) - 1.0) < 1e-6)
-test("BugAssigner: weights match critical preset",   list(weights) == list(WEIGHTS["critical"]))
+test("BugAssigner: signals dict is returned",        isinstance(signals, dict) and "urgency_score" in signals)
 test("BugAssigner: best dev is top of rankings",     rankings[0][0].name == best.name)
 test("BugAssigner: scores are descending",
      all(rankings[i][1] >= rankings[i+1][1] for i in range(len(rankings)-1)))
 
-# Weight presets
-section("1b. Unit Tests — Weight Presets")
-for severity in ("critical", "normal", "minor"):
-    w = WEIGHTS[severity]
-    test(f"Weights [{severity}]: sum to 1.0",  abs(float(w.sum()) - 1.0) < 1e-6)
-    test(f"Weights [{severity}]: no negatives", all(v >= 0 for v in w))
+# Dynamic weight engine
+section("1b. Unit Tests — Dynamic Weight Engine")
+
+# Every bug gets a unique weight vector
+bug_crash = Bug(1, "production outage crash critical server down", "critical", "backend")
+bug_css   = Bug(2, "typo alignment css padding margin cosmetic",   "minor",    "ui")
+bug_leak  = Bug(3, "memory leak threading concurrent deadlock",    "normal",   "backend")
+
+w_crash, s_crash = compute_dynamic_weights(bug_crash)
+w_css,   s_css   = compute_dynamic_weights(bug_css)
+w_leak,  s_leak  = compute_dynamic_weights(bug_leak)
+
+test("DynWeights: crash bug sums to 1.0",  abs(float(w_crash.sum()) - 1.0) < 1e-6)
+test("DynWeights: css bug sums to 1.0",    abs(float(w_css.sum())   - 1.0) < 1e-6)
+test("DynWeights: leak bug sums to 1.0",   abs(float(w_leak.sum())  - 1.0) < 1e-6)
+test("DynWeights: no negatives in weights", all(v >= 0 for w in [w_crash, w_css, w_leak] for v in w))
+
+# Verify signal direction — crash bug should weight FixTime (index 1) heavily
+test("DynWeights: crash bug weights FixTime highest",
+     w_crash[1] == max(w_crash), f"Weights: {[round(v,3) for v in w_crash]}")
+
+# CSS/cosmetic bug should weight Workload (index 3) heavily
+test("DynWeights: css bug weights Workload highest",
+     w_css[3] == max(w_css), f"Weights: {[round(v,3) for v in w_css]}")
+
+# Complex bug should weight Experience (0) or SuccessRate (2) heavily
+test("DynWeights: complex bug Experience > minor threshold",
+     w_leak[0] > 0.15, f"Experience weight: {w_leak[0]:.3f}")
+
+# Each bug should get different weights
+test("DynWeights: crash != css (uniqueness)",  list(w_crash) != list(w_css))
+test("DynWeights: crash != leak (uniqueness)", list(w_crash) != list(w_leak))
+test("DynWeights: css != leak (uniqueness)",   list(w_css)   != list(w_leak))
+
+# Signals dict has the required keys
+required_keys = {"urgency_score", "complexity_score", "routine_score",
+                 "severity_score", "effective_urgency",
+                 "urgency_keywords", "complexity_keywords", "routine_keywords"}
+test("DynWeights: signals dict has all keys", required_keys.issubset(s_crash.keys()))
+
+# Urgency keywords should be detected for the crash bug
+test("DynWeights: crash signals contain urgency keywords",
+     len(s_crash["urgency_keywords"]) > 0,
+     f"Found: {s_crash['urgency_keywords']}")
+
+# Routine keywords should be detected for the css bug
+test("DynWeights: css signals contain routine keywords",
+     len(s_css["routine_keywords"]) > 0,
+     f"Found: {s_css['routine_keywords']}")
+
+# Complexity keywords should be detected for the leak bug
+test("DynWeights: leak signals contain complexity keywords",
+     len(s_leak["complexity_keywords"]) > 0,
+     f"Found: {s_leak['complexity_keywords']}")
+
+# Score bounds
+test("DynWeights: urgency_score in [0, 1]",    0.0 <= s_crash["urgency_score"]    <= 1.0)
+test("DynWeights: complexity_score in [0, 1]", 0.0 <= s_leak["complexity_score"]  <= 1.0)
+test("DynWeights: routine_score in [0, 1]",    0.0 <= s_css["routine_score"]      <= 1.0)
+test("DynWeights: effective_urgency in [0, 1]",0.0 <= s_crash["effective_urgency"] <= 1.0)
 
 # ===========================================================================
 # SECTION 2 — Edge Case Tests
@@ -156,14 +210,14 @@ section("2. Edge Case Tests")
 
 # Empty description
 edge_bug = Bug(999, "", "normal", "general")
-best_e, rankings_e, weights_e = assigner.assign(edge_bug, k=3)
+best_e, rankings_e, weights_e, signals_e = assigner.assign(edge_bug, k=3)
 test("Edge: empty description doesn't crash", True)  # If we get here, no exception was raised
 
-# Unknown severity falls back to 'normal' weights
+# Unknown severity falls back to normal (severity_score=0.5)
 edge_bug2 = Bug(998, "some bug", "UNKNOWN_SEVERITY", "ui")
-# severity is lowercased in __init__ but won't be in WEIGHTS dict
-_, _, w2 = assigner.assign(edge_bug2, k=3)
+_, _, w2, s2 = assigner.assign(edge_bug2, k=3)
 test("Edge: unknown severity uses fallback weights", w2 is not None and abs(float(w2.sum()) - 1.0) < 1e-6)
+test("Edge: unknown severity has severity_score 0.5", abs(s2["severity_score"] - 0.5) < 1e-6)
 
 # All developers on leave
 devs_leave = [
@@ -171,7 +225,7 @@ devs_leave = [
 ]
 assigner_leave = BugAssigner()
 assigner_leave.fit(bugs_train, devs_leave, resolutions)
-best_l, _, _ = assigner_leave.assign(new_bug, k=3)
+best_l, _, _, _ = assigner_leave.assign(new_bug, k=3)
 test("Edge: all on-leave -> returns None", best_l is None)
 
 # All developers overloaded (workload > 95)
@@ -180,14 +234,14 @@ devs_overloaded = [
 ]
 assigner_over = BugAssigner()
 assigner_over.fit(bugs_train, devs_overloaded, resolutions)
-best_o, _, _ = assigner_over.assign(new_bug, k=3)
+best_o, _, _, _ = assigner_over.assign(new_bug, k=3)
 test("Edge: all overloaded -> returns None", best_o is None)
 
 # Single developer (no comparison possible, everyone gets 1.0)
 single_dev = [Developer(1, "Solo", experience=10, fix_time=2.0, success_rate=100, workload=0, domain_skill=70)]
 assigner_single = BugAssigner()
 assigner_single.fit(bugs_train, single_dev, {101: 1, 102: 1, 103: 1})
-best_s, rankings_s, _ = assigner_single.assign(new_bug, k=3)
+best_s, rankings_s, _, _ = assigner_single.assign(new_bug, k=3)
 test("Edge: single developer is returned as best", best_s is not None and best_s.name == "Solo")
 
 
@@ -288,7 +342,7 @@ else:
             no_assignment += 1
             continue
 
-        best, rankings, _ = assigner_eval.assign(bug, k=5)
+        best, rankings, _, _ = assigner_eval.assign(bug, k=5)
         if best is None:
             no_assignment += 1
             continue
