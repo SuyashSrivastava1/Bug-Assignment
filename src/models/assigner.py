@@ -4,38 +4,31 @@ src/models/assigner.py
 The core Bug-to-Developer Assignment algorithm.
 
 Pipeline (8 steps):
-  1. Feature Extraction     — Dense semantic embeddings using Sentence-Transformers (all-MiniLM-L6-v2).
-  2. Similarity Search      — KNN cosine similarity against all historical bugs (K=20).
+  1. Feature Extraction     — Hybrid embeddings: dense (SentenceTransformers) + sparse (TF-IDF).
+  2. Similarity Search      — Hybrid KNN cosine similarity against all historical bugs (K=20).
   3. Candidate Extraction   — Identify developers who fixed the top-K similar bugs.
   4. Hard Filtering         — Remove developers on leave or over 95% workload.
   5. KNN Affinity           — Per-developer topical expertise score: mean cosine similarity
                               between the new bug and every bug that developer has fixed.
   6. Attribute Matrix       — Build a matrix of 6 performance metrics per candidate.
-  7. Dynamic Weighting      — Compute per-bug weights from NLP text signals (NOT a preset).
+  7. Semantic Prototype Weighting — Unique per-bug weights computed by measuring cosine
+                              similarity of the bug description to 6 prototype sentences,
+                              one per attribute dimension. No hardcoded keyword lists.
   8. WSM + Component Bonus  — Min-Max scale, weighted sum, apply component-match multiplier.
 
-Accuracy Improvements (v3)
---------------------------
-Replaced bag-of-words TF-IDF with dense semantic embeddings (`all-MiniLM-L6-v2`).
-This provides genuine semantic understanding (e.g. knowing "crash" and "segfault" are similar).
-Vectors are now dense (384 dimensions) instead of sparse, but still fit comfortably in memory.
+Accuracy Improvements (v4 — Semantic Prototype Weighting)
+----------------------------------------------------------
+Step 7 now uses the same SentenceTransformer model to drive weight computation.
+Six prototype sentences define the "ideal bug" for each attribute dimension.
+The bug's embedding is compared to each prototype via cosine similarity, and the
+normalised similarity scores become the weight vector.
 
-Dynamic Weighting (Step 7)
---------------------------
-Every bug gets a UNIQUE 6-element weight vector computed fresh from its description text.
-Three independent signal scores drive the weights:
-
-  Urgency Score    — "crash", "outage", "production", "security", etc.
-                     High urgency → heavier weight on Fix Time and Domain Skill.
-
-  Complexity Score — "memory leak", "threading", "algorithm", "architecture", etc.
-                     High complexity → heavier weight on Experience, Success Rate, and KNN Affinity.
-
-  Routine Score    — "typo", "css", "alignment", "cosmetic", "padding", etc.
-                     High routine → heavier weight on Workload (assign to someone free).
-
-Severity (critical / normal / minor) acts as a continuous amplifier of the urgency
-signal — it does NOT pick from a fixed table.
+Advantages over keyword heuristics:
+  • No hardcoded keyword lists to maintain.
+  • Understands synonyms: "segfault" → urgency, even without "crash" in the text.
+  • The weight tuning interface is plain English: rewrite a prototype sentence to
+    change how that attribute is weighted.
+  • Severity is still blended in as a multiplicative signal on the relevant prototypes.
 """
 
 import numpy as np
@@ -48,114 +41,65 @@ from src.models.developer import Developer
 
 
 # ---------------------------------------------------------------------------
-# NLP Signal Keyword Sets
+# Semantic Prototype Sentences  (one per attribute column)
 # ---------------------------------------------------------------------------
+# To tune how an attribute is weighted, simply rewrite its prototype sentence
+# in plain English. No code formulas need to change.
+#
+# Column order: [Experience, Fix Time, Success Rate, Workload, Domain Skill, KNN Affinity]
 
-URGENCY_KEYWORDS = {
-    "crash", "crashed", "crashing", "down", "outage", "production", "prod",
-    "hotfix", "emergency", "regression", "breaking", "broken", "blocker",
-    "data loss", "security", "vulnerability", "exploit", "breach",
-    "freeze", "unresponsive", "hang", "hangs", "infinite loop",
-    "null pointer", "segfault", "exception", "500", "404", "403",
-    "urgent", "critical", "showstopper", "p0", "p1",
-}
-
-COMPLEXITY_KEYWORDS = {
-    "memory", "leak", "threading", "concurrent", "concurrency",
-    "race condition", "deadlock", "algorithm", "performance",
-    "architecture", "refactor", "scalability", "bottleneck",
-    "optimization", "async", "synchronization", "distributed",
-    "database", "migration", "cache", "caching", "integration",
-    "latency", "throughput", "indexing", "sharding", "replication",
-    "cryptography", "encryption", "authentication", "oauth",
-    "dependency", "circular", "heap", "stack overflow",
-}
-
-ROUTINE_KEYWORDS = {
-    "typo", "alignment", "color", "colour", "style", "cosmetic",
-    "spelling", "css", "hover", "padding", "margin", "font",
-    "icon", "tooltip", "wording", "label", "documentation",
-    "comment", "whitespace", "lint", "formatting", "indent",
-    "minor", "trivial", "small", "simple", "rename", "cleanup",
-    "translation", "i18n", "l10n", "placeholder", "readme",
-}
+PROTOTYPE_SENTENCES = [
+    # 0 — Experience
+    (
+        "This bug requires a senior engineer with deep historical knowledge of the codebase. "
+        "It involves legacy systems, architectural decisions, or complex subsystems that only "
+        "an experienced developer who has worked on this project for a long time can understand. "
+        "Requires principal-level expertise, code ownership, and long-term project familiarity."
+    ),
+    # 1 — Fix Time  (high similarity → speed matters → lower fix time preferred)
+    (
+        "This is an emergency requiring an immediate hotfix. The system is down in production, "
+        "customers are impacted, and the fix must be deployed as fast as possible. "
+        "Speed is the top priority. Urgent outage, critical regression, blocker, showstopper, "
+        "rapid turnaround needed, P0 or P1 severity, cannot wait."
+    ),
+    # 2 — Success Rate
+    (
+        "This is a high-stakes bug in mission-critical code with zero tolerance for errors. "
+        "The fix must be correct the first time — a wrong fix could cause data loss or a "
+        "security breach. Needs a developer with a strong track record of successful, "
+        "reliable, and thoroughly tested resolutions. Quality over speed."
+    ),
+    # 3 — Workload  (high similarity → anyone free can handle it)
+    (
+        "This is a trivial, low-priority, non-blocking bug that any available developer can "
+        "handle. It is a simple cosmetic fix, minor wording change, or a one-line tweak. "
+        "Assign to whoever has the most free capacity. No special skill needed."
+    ),
+    # 4 — Domain Skill
+    (
+        "This bug is isolated to a very specific feature module or technical domain. "
+        "It requires specialised knowledge of that particular component, API, or subsystem. "
+        "Only a developer who is an expert in this specific area of the codebase can "
+        "diagnose and resolve it efficiently."
+    ),
+    # 5 — KNN Affinity
+    (
+        "This bug closely resembles previously reported issues and follows a well-known "
+        "pattern seen in past bug reports. Assign to the developer who has historically "
+        "resolved the most similar bugs, as they already understand the root cause pattern "
+        "and will have the relevant context from past fixes."
+    ),
+]
 
 # Column indices in the 6-column attribute matrix
 # [Experience, Fix Time, Success Rate, Workload, Domain Skill, KNN Affinity]
 BENEFIT_COLS = {0, 2, 4, 5}   # Experience, Success Rate, Domain Skill, KNN Affinity
 COST_COLS    = {1, 3}          # Fix Time, Workload
 
-
-# ---------------------------------------------------------------------------
-# Per-bug Dynamic Weight Engine
-# ---------------------------------------------------------------------------
-
-def compute_dynamic_weights(bug: Bug) -> tuple:
-    """
-    Compute a unique 6-element weight vector for this bug based on NLP text signals.
-
-    The weight vector columns match the attribute matrix:
-      [Experience, Fix Time, Success Rate, Workload, Domain Skill, KNN Affinity]
-
-    Returns
-    -------
-    (weights, signals)
-    weights : np.ndarray  — 6 elements, normalised to sum exactly to 1.0
-    signals : dict        — breakdown of detected signals for display / debugging
-    """
-    text = (bug.description + " " + bug.severity).lower()
-
-    # --- Signal extraction ---
-    urgency_hits    = {kw for kw in URGENCY_KEYWORDS    if kw in text}
-    complexity_hits = {kw for kw in COMPLEXITY_KEYWORDS if kw in text}
-    routine_hits    = {kw for kw in ROUTINE_KEYWORDS    if kw in text}
-
-    # Normalise hit counts to [0, 1]; cap at 3 hits -> score 1.0
-    urgency_score    = min(len(urgency_hits)    / 3.0, 1.0)
-    complexity_score = min(len(complexity_hits) / 3.0, 1.0)
-    routine_score    = min(len(routine_hits)    / 3.0, 1.0)
-
-    # Severity as a continuous factor: critical=1.0, normal=0.5, minor=0.0
-    severity_score = {"critical": 1.0, "normal": 0.5, "minor": 0.0}.get(bug.severity, 0.5)
-
-    # Combined urgency pressure: severity amplifies urgency signal
-    effective_urgency = min(
-        urgency_score * 0.5 + severity_score * 0.5 + urgency_score * severity_score * 0.3,
-        1.0,
-    )
-
-    # --- Raw weight formula (6 dimensions) ---
-    # Each weight has a minimum base so no dimension is ever completely ignored.
-    # Signals add on top of the base.
-    w_experience  = 0.10 + 0.20 * complexity_score + 0.05 * severity_score
-    w_fixtime     = 0.10 + 0.40 * effective_urgency
-    w_successrate = 0.10 + 0.15 * complexity_score + 0.05 * severity_score
-    w_workload    = 0.10 + 0.50 * routine_score + 0.15 * max(0.0, 1.0 - effective_urgency - complexity_score)
-    w_domainskill = 0.10 + 0.25 * severity_score + 0.15 * urgency_score
-    # KNN Affinity: always meaningful; boosted by complexity (need topical expert)
-    # and slightly by urgency (want someone who's fixed similar urgent bugs before)
-    w_knnaffinity = 0.15 + 0.15 * complexity_score + 0.10 * effective_urgency
-
-    raw = np.array(
-        [w_experience, w_fixtime, w_successrate, w_workload, w_domainskill, w_knnaffinity],
-        dtype=float,
-    )
-
-    # Normalise so weights sum to exactly 1.0
-    weights = raw / raw.sum()
-
-    signals = {
-        "urgency_score":     round(float(urgency_score),     3),
-        "complexity_score":  round(float(complexity_score),  3),
-        "routine_score":     round(float(routine_score),     3),
-        "severity_score":    round(float(severity_score),    3),
-        "effective_urgency": round(float(effective_urgency), 3),
-        "urgency_keywords":    sorted(urgency_hits),
-        "complexity_keywords": sorted(complexity_hits),
-        "routine_keywords":    sorted(routine_hits),
-    }
-
-    return weights, signals
+PROTOTYPE_NAMES = [
+    "experience", "fix_time", "success_rate", "workload", "domain_skill", "knn_affinity"
+]
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +135,12 @@ class BugAssigner:
         # Per-developer lookup tables built at fit() time
         self._dev_bug_indices: dict[int, list[int]] = {}  # dev_id -> [hist indices]
         self._dev_components: dict[int, set[str]]   = {}  # dev_id -> {module, ...}
+
+        # Pre-encode the 6 prototype sentences once at init time.
+        # Shape: (6, embedding_dim) — reused for every assign() call.
+        self._prototype_vectors = self._dense_model.encode(
+            PROTOTYPE_SENTENCES, show_progress_bar=False
+        )
 
     # ------------------------------------------------------------------
     # Training
@@ -318,8 +268,8 @@ class BugAssigner:
             dtype=float,
         )
 
-        # Step 7 — Per-Bug Dynamic Weight Computation (unique for every bug)
-        weights, signals = compute_dynamic_weights(new_bug)
+        # Step 7 — Semantic Prototype Weight Computation (unique for every bug)
+        weights, signals = self._compute_semantic_weights(new_bug)
 
         # Step 8a — Min-Max Normalisation + Weighted Sum Model (WSM)
         mins = matrix.min(axis=0)
@@ -348,3 +298,62 @@ class BugAssigner:
         ranked = [(available[i], float(scores[i])) for i in order]
 
         return ranked[0][0], ranked, weights, signals
+
+    # ------------------------------------------------------------------
+    # Semantic Prototype Weighting
+    # ------------------------------------------------------------------
+
+    def _compute_semantic_weights(self, bug: Bug) -> tuple:
+        """
+        Compute a unique 6-element weight vector by measuring cosine similarity
+        between the bug description and each of the 6 prototype sentences.
+
+        The prototype sentences act as "ideal bug descriptions" for each attribute.
+        A bug that is semantically close to the Fix Time prototype (urgent, fast, P0)
+        will receive a high weight on the Fix Time attribute — no keyword lists needed.
+
+        Severity acts as a multiplicative booster on the most relevant prototypes:
+          critical  → boosts Fix Time (1) and Success Rate (2)
+          minor     → boosts Workload (3)  (assign to whoever is free)
+
+        Returns
+        -------
+        (weights, signals)
+        weights : np.ndarray — 6 elements, normalised to sum exactly to 1.0
+        signals : dict       — similarity scores and severity for display / debugging
+        """
+        # Encode the bug using just the dense model (prototype comparison is semantic)
+        text = bug.description + " " + bug.severity
+        bug_vec = self._dense_model.encode([text])  # shape (1, dim)
+
+        # Cosine similarity to each of the 6 prototypes → raw scores in [-1, 1]
+        # Shift to [0, 1] by applying (score + 1) / 2 so negatives don't cause issues
+        raw_sims = cosine_similarity(bug_vec, self._prototype_vectors)[0]  # shape (6,)
+        raw_scores = (raw_sims + 1.0) / 2.0   # map [-1,1] -> [0,1]
+
+        # Severity multiplier: amplifies the prototypes most relevant to severity
+        severity_score = {"critical": 1.0, "normal": 0.5, "minor": 0.0}.get(bug.severity, 0.5)
+
+        # critical bugs → boost Fix Time (1) and Success Rate (2)
+        # minor bugs    → boost Workload (3) so they go to the freest person
+        severity_boost = np.ones(6, dtype=float)
+        severity_boost[1] *= 1.0 + 0.5 * severity_score          # Fix Time
+        severity_boost[2] *= 1.0 + 0.3 * severity_score          # Success Rate
+        severity_boost[3] *= 1.0 + 0.4 * (1.0 - severity_score)  # Workload (minor)
+
+        boosted = raw_scores * severity_boost
+
+        # Add a small floor so no attribute weight ever collapses to zero
+        floored = boosted + 0.05
+
+        # Normalise to sum exactly to 1.0
+        weights = floored / floored.sum()
+
+        signals = {
+            name: round(float(raw_sims[i]), 4)
+            for i, name in enumerate(PROTOTYPE_NAMES)
+        }
+        signals["severity_score"] = round(severity_score, 3)
+        signals["weight_vector"] = [round(float(w), 4) for w in weights]
+
+        return weights, signals

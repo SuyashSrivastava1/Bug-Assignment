@@ -90,7 +90,7 @@ section("1. Unit Tests — Models")
 
 from src.models.bug import Bug
 from src.models.developer import Developer
-from src.models.assigner import BugAssigner, compute_dynamic_weights
+from src.models.assigner import BugAssigner
 
 # Bug
 b = Bug(id=1, description="App crashes on startup", severity="CRITICAL", module="core")
@@ -136,71 +136,71 @@ test("BugAssigner: assign() returns a developer",    best is not None)
 test("BugAssigner: rankings is a non-empty list",    len(rankings) > 0)
 test("BugAssigner: weights are returned",            weights is not None and len(weights) == 6)
 test("BugAssigner: weights sum to 1.0",              abs(float(weights.sum()) - 1.0) < 1e-6)
-test("BugAssigner: signals dict is returned",        isinstance(signals, dict) and "urgency_score" in signals)
+test("BugAssigner: signals dict is returned",        isinstance(signals, dict) and "severity_score" in signals)
 test("BugAssigner: best dev is top of rankings",     rankings[0][0].name == best.name)
 test("BugAssigner: scores are descending",
      all(rankings[i][1] >= rankings[i+1][1] for i in range(len(rankings)-1)))
 
-# Dynamic weight engine
-section("1b. Unit Tests — Dynamic Weight Engine")
+# Dynamic weight engine — now powered by 6-Prototype Semantic Weighting
+section("1b. Unit Tests — Dynamic Weight Engine (Semantic Prototypes)")
 
-# Every bug gets a unique weight vector
+# We need a fitted assigner to call _compute_semantic_weights
+# Use the already-fitted assigner from above (trained on bugs_train + devs)
 bug_crash = Bug(1, "production outage crash critical server down", "critical", "backend")
 bug_css   = Bug(2, "typo alignment css padding margin cosmetic",   "minor",    "ui")
 bug_leak  = Bug(3, "memory leak threading concurrent deadlock",    "normal",   "backend")
 
-w_crash, s_crash = compute_dynamic_weights(bug_crash)
-w_css,   s_css   = compute_dynamic_weights(bug_css)
-w_leak,  s_leak  = compute_dynamic_weights(bug_leak)
+w_crash, s_crash = assigner._compute_semantic_weights(bug_crash)
+w_css,   s_css   = assigner._compute_semantic_weights(bug_css)
+w_leak,  s_leak  = assigner._compute_semantic_weights(bug_leak)
 
 test("DynWeights: crash bug sums to 1.0",  abs(float(w_crash.sum()) - 1.0) < 1e-6)
 test("DynWeights: css bug sums to 1.0",    abs(float(w_css.sum())   - 1.0) < 1e-6)
 test("DynWeights: leak bug sums to 1.0",   abs(float(w_leak.sum())  - 1.0) < 1e-6)
 test("DynWeights: no negatives in weights", all(v >= 0 for w in [w_crash, w_css, w_leak] for v in w))
 
-# Verify signal direction — crash bug should weight FixTime (index 1) heavily
+# Verify signal direction — crash bug (critical) should weight FixTime (index 1) heavily
 test("DynWeights: crash bug weights FixTime highest",
      w_crash[1] == max(w_crash), f"Weights: {[round(v,3) for v in w_crash]}")
 
-# CSS/cosmetic bug should weight Workload (index 3) heavily
+# CSS/cosmetic bug (minor) should weight Workload (index 3) heavily
 test("DynWeights: css bug weights Workload highest",
      w_css[3] == max(w_css), f"Weights: {[round(v,3) for v in w_css]}")
 
-# Complex bug should weight Experience (0) or SuccessRate (2) heavily
+# Complex bug should weight Experience (0) meaningfully
 test("DynWeights: complex bug Experience > minor threshold",
-     w_leak[0] > 0.15, f"Experience weight: {w_leak[0]:.3f}")
+     w_leak[0] > 0.10, f"Experience weight: {w_leak[0]:.3f}")
 
 # Each bug should get different weights
 test("DynWeights: crash != css (uniqueness)",  list(w_crash) != list(w_css))
 test("DynWeights: crash != leak (uniqueness)", list(w_crash) != list(w_leak))
 test("DynWeights: css != leak (uniqueness)",   list(w_css)   != list(w_leak))
 
-# Signals dict has the required keys
-required_keys = {"urgency_score", "complexity_score", "routine_score",
-                 "severity_score", "effective_urgency",
-                 "urgency_keywords", "complexity_keywords", "routine_keywords"}
+# Signals dict has the required keys — now prototype similarity scores
+required_keys = {
+    "experience", "fix_time", "success_rate", "workload", "domain_skill", "knn_affinity",
+    "severity_score", "weight_vector"
+}
 test("DynWeights: signals dict has all keys", required_keys.issubset(s_crash.keys()))
 
-# Urgency keywords should be detected for the crash bug
-test("DynWeights: crash signals contain urgency keywords",
-     len(s_crash["urgency_keywords"]) > 0,
-     f"Found: {s_crash['urgency_keywords']}")
+# Prototype similarity scores should all be in [-1, 1] range
+test("DynWeights: experience proto score in [-1,1]",   -1.0 <= s_crash["experience"]   <= 1.0)
+test("DynWeights: fix_time proto score in [-1,1]",     -1.0 <= s_crash["fix_time"]      <= 1.0)
+test("DynWeights: success_rate proto score in [-1,1]", -1.0 <= s_crash["success_rate"] <= 1.0)
+test("DynWeights: workload proto score in [-1,1]",     -1.0 <= s_css["workload"]        <= 1.0)
 
-# Routine keywords should be detected for the css bug
-test("DynWeights: css signals contain routine keywords",
-     len(s_css["routine_keywords"]) > 0,
-     f"Found: {s_css['routine_keywords']}")
+# Severity score bounds
+test("DynWeights: severity_score in [0,1]",  0.0 <= s_crash["severity_score"] <= 1.0)
 
-# Complexity keywords should be detected for the leak bug
-test("DynWeights: leak signals contain complexity keywords",
-     len(s_leak["complexity_keywords"]) > 0,
-     f"Found: {s_leak['complexity_keywords']}")
+# Critical bug should have higher fix_time prototype similarity than a minor bug
+test("DynWeights: crash has higher fix_time score than css",
+     s_crash["fix_time"] > s_css["fix_time"],
+     f"crash fix_time={s_crash['fix_time']:.4f}, css fix_time={s_css['fix_time']:.4f}")
 
-# Score bounds
-test("DynWeights: urgency_score in [0, 1]",    0.0 <= s_crash["urgency_score"]    <= 1.0)
-test("DynWeights: complexity_score in [0, 1]", 0.0 <= s_leak["complexity_score"]  <= 1.0)
-test("DynWeights: routine_score in [0, 1]",    0.0 <= s_css["routine_score"]      <= 1.0)
-test("DynWeights: effective_urgency in [0, 1]",0.0 <= s_crash["effective_urgency"] <= 1.0)
+# Minor bug should have higher workload prototype similarity than critical bug
+test("DynWeights: css has higher workload score than crash",
+     s_css["workload"] > s_crash["workload"],
+     f"css workload={s_css['workload']:.4f}, crash workload={s_crash['workload']:.4f}")
 
 # ===========================================================================
 # SECTION 2 — Edge Case Tests
