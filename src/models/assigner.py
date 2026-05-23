@@ -4,7 +4,7 @@ src/models/assigner.py
 The core Bug-to-Developer Assignment algorithm.
 
 Pipeline (8 steps):
-  1. Feature Extraction     — TF-IDF vectorise the new bug description (sparse, bigrams).
+  1. Feature Extraction     — Dense semantic embeddings using Sentence-Transformers (all-MiniLM-L6-v2).
   2. Similarity Search      — KNN cosine similarity against all historical bugs (K=20).
   3. Candidate Extraction   — Identify developers who fixed the top-K similar bugs.
   4. Hard Filtering         — Remove developers on leave or over 95% workload.
@@ -14,26 +14,11 @@ Pipeline (8 steps):
   7. Dynamic Weighting      — Compute per-bug weights from NLP text signals (NOT a preset).
   8. WSM + Component Bonus  — Min-Max scale, weighted sum, apply component-match multiplier.
 
-Accuracy Improvements (v2)
+Accuracy Improvements (v3)
 --------------------------
-Five changes over v1 to increase Top-1/Top-3/Top-5:
-
-  1. TF-IDF tuning: bigrams (ngram_range=(1,2)), sublinear_tf=True, max_features=50_000.
-     Bigrams like "memory leak", "null pointer", "race condition" are highly discriminative.
-     Sublinear TF dampens the effect of very frequent terms.
-
-  2. Wider candidate pool: K raised from 5 to 20. With only 5 neighbours the correct
-     developer was often never in the candidate set — a hard ceiling on accuracy.
-
-  3. KNN Affinity (6th metric): for every candidate, compute the average cosine similarity
-     between the new bug and all historical bugs that developer has previously fixed.
-     This directly measures topical expertise — not just global experience.
-
-  4. Component match bonus: if the new bug's module matches any component in a developer's
-     history, their final score is multiplied by 1.1 (a 10% boost).
-
-  5. Sparse vectors: vectors stay as scipy sparse CSR matrices instead of being densified,
-     making the approach memory-safe with 200k+ training bugs.
+Replaced bag-of-words TF-IDF with dense semantic embeddings (`all-MiniLM-L6-v2`).
+This provides genuine semantic understanding (e.g. knowing "crash" and "segfault" are similar).
+Vectors are now dense (384 dimensions) instead of sparse, but still fit comfortably in memory.
 
 Dynamic Weighting (Step 7)
 --------------------------
@@ -54,7 +39,7 @@ signal — it does NOT pick from a fixed table.
 """
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from src.models.bug import Bug
@@ -188,18 +173,10 @@ class BugAssigner:
     """
 
     def __init__(self):
-        # TF-IDF with bigrams, sublinear TF, and capped vocabulary.
-        # Stays sparse — never call .toarray() on the full matrix.
-        self._vectorizer = TfidfVectorizer(
-            stop_words="english",
-            min_df=1,           # include all terms (small unit-test corpora need this)
-            max_df=0.95,        # drop terms appearing in >95% of documents (near-stop-words)
-            ngram_range=(1, 2), # unigrams + bigrams ("memory leak", "null pointer")
-            max_features=50_000,
-            sublinear_tf=True,  # use log(1 + tf) — dampens very frequent terms
-        )
+        # Semantic embeddings using SentenceTransformers
+        self._model = SentenceTransformer("all-MiniLM-L6-v2")
         self._historical_bugs: list[Bug] = []
-        self._historical_vectors = None          # scipy CSR sparse matrix
+        self._historical_vectors = None          # dense numpy array
         self._developers: list[Developer] = []
         self._resolutions: dict = {}             # bug_id -> developer_id
 
@@ -245,9 +222,9 @@ class BugAssigner:
             self._dev_bug_indices[dev_id].append(idx)
             self._dev_components[dev_id].add(bug.module)
 
-        # Fit TF-IDF on the full corpus; keep as sparse CSR matrix.
+        # Encode corpus to dense embeddings
         corpus = [bug.description for bug in historical_bugs]
-        self._historical_vectors = self._vectorizer.fit_transform(corpus)
+        self._historical_vectors = self._model.encode(corpus, show_progress_bar=False)
 
     # ------------------------------------------------------------------
     # Inference
@@ -277,11 +254,11 @@ class BugAssigner:
         if self._historical_vectors is None:
             raise RuntimeError("BugAssigner has not been trained yet. Call fit() first.")
 
-        # Step 1 — Feature Extraction (sparse)
-        new_vector = self._vectorizer.transform([new_bug.description])
+        # Step 1 — Feature Extraction (dense semantic embedding)
+        new_vector = self._model.encode([new_bug.description])
 
         # Step 2 — KNN Similarity Search across all historical bugs
-        # cosine_similarity handles sparse inputs natively; result is a dense 1-D array.
+        # cosine_similarity handles dense arrays properly.
         similarities = cosine_similarity(new_vector, self._historical_vectors)[0]
         top_k_indices = similarities.argsort()[-k:][::-1]
 

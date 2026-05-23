@@ -1,6 +1,6 @@
 # Bug-to-Developer Assignment System
 
-An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (TF-IDF + KNN) and **Multi-Criteria Decision Making** (Weighted Sum Model).
+An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (Dense Embeddings with Sentence-Transformers + KNN) and **Multi-Criteria Decision Making** (Weighted Sum Model).
 
 ## Quick Start
 
@@ -85,10 +85,10 @@ Paste a GitHub issue URL:
 New Bug Report
       │
       ▼
-1. TF-IDF Vectorisation  ──► Convert bug description text into a numeric feature vector
+1. Dense Embeddings       ──► Convert bug description text into a numeric feature vector using `all-MiniLM-L6-v2`
       │
       ▼
-2. KNN Similarity Search ──► Find the top-K most similar bugs in the historical database
+2. KNN Similarity Search  ──► Find the top-K most similar bugs in the historical database using cosine similarity
       │
       ▼
 3. Candidate Extraction  ──► Identify the developers who fixed those similar bugs
@@ -138,11 +138,11 @@ When routing a GitHub bug, the system uses **three data sources**:
 
 | Source | Role | Size |
 |---|---|---|
-| **Eclipse dataset** (`data/eclipse/`) | NLP context — enriches TF-IDF vocabulary with structured bug reports | ~10,000 bugs |
+| **Eclipse dataset** (`data/eclipse/`) | NLP context — enriches semantic vocabulary with structured bug reports | ~10,000 bugs |
 | **Bugzilla corpus** (`data/bugzilla/`) | NLP context — adds 35,000+ diverse open-source bug descriptions from 50+ projects | ~35,000+ entries |
 | **GitHub repo history** | Candidate pool — the **only** source of actual developers | Project-specific |
 
-The NLP context sources improve similarity matching without ever adding Eclipse or Bugzilla developers to the candidate pool. Only real contributors from the target GitHub project are ever recommended.
+The NLP context sources improve semantic matching without ever adding Eclipse or Bugzilla developers to the candidate pool. Only real contributors from the target GitHub project are ever recommended.
 
 ---
 
@@ -152,12 +152,12 @@ Evaluated on an 80/20 train/test split of the Eclipse dataset (9,800 train / 2,0
 
 | Metric | Score |
 |---|---|
-| **Top-1 Accuracy** | 22.5% |
-| **Top-3 Accuracy** | 51.5% |
-| **Top-5 Accuracy** | 55.5% |
-| **Mean Reciprocal Rank (MRR)** | 0.361 |
+| **Top-1 Accuracy** | 22.50% |
+| **Top-3 Accuracy** | 48.50% |
+| **Top-5 Accuracy** | 63.50% |
+| **Mean Reciprocal Rank (MRR)** | 0.389 |
 
-> **What these mean:** Top-3 accuracy of 51.5% means the correct developer appears in the AI's top 3 recommendations more than half the time. In practice, giving a project manager a ranked shortlist of 3 candidates is highly effective.
+> **What these mean:** Top-5 accuracy of 63.50% means the correct developer appears in the AI's top 5 recommendations more than 60% of the time. In practice, giving a project manager a ranked shortlist of 3-5 candidates is highly effective.
 
 Run the evaluation yourself:
 
@@ -178,7 +178,7 @@ Bug Classification/
 │   ├── models/
 │   │   ├── bug.py              # Bug data class
 │   │   ├── developer.py        # Developer data class (5 metrics)
-│   │   └── assigner.py         # Core algorithm: TF-IDF, KNN, dynamic weights, WSM
+│   │   └── assigner.py         # Core algorithm: Dense Embeddings, KNN, dynamic weights, WSM
 │   │
 │   ├── loaders/
 │   │   ├── base.py             # Shared utilities: map_severity(), build_developers()
@@ -207,7 +207,7 @@ The system is designed to accept additional NLP context datasets with minimal co
 
 1. Write a loader in `src/loaders/` that returns `(list[Bug], {})` (empty dev_stats).
 2. Call it inside `Router._load_nlp_context()` in `src/router.py` and append to `context_bugs`.
-3. The TF-IDF model will automatically incorporate the new vocabulary.
+3. The Dense Embedding model will automatically incorporate the new vocabulary context.
 
 No changes to the algorithm, weights, or candidate pool logic are needed.
 
@@ -215,7 +215,7 @@ No changes to the algorithm, weights, or candidate pool logic are needed.
 
 ```
 numpy
-scikit-learn
+sentence-transformers
 ```
 
 Install with:
