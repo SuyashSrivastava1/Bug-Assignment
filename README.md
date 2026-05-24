@@ -1,5 +1,11 @@
 # Bug-to-Developer Assignment System
 
+> [!NOTE]
+> **Branch: `hybrid-search`**
+> This experimental branch replaces the basic similarity search with a **Hybrid Text Analysis** pipeline, combining Dense Embeddings (`all-MiniLM-L6-v2`) with Sparse Lexical matching (`TF-IDF`). This allows the system to match deep semantic meaning while still guaranteeing exact-match hits on specific code keywords.
+> 
+> *Test Accuracy: ~23.00% Top-1*
+
 An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (Dense Embeddings with Sentence-Transformers + KNN) and **Multi-Criteria Decision Making** (Weighted Sum Model).
 
 ## Quick Start
