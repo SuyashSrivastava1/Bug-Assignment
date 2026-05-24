@@ -45,7 +45,7 @@ BASELINE_TOP1 = 22.00
 if cv_results["avg_top1"] > BASELINE_TOP1:
     trainer.train(X, y, groups)
     trainer.save_model("models/ltr_ranker.json")
-    print("✅ Model saved. Proceed to Phase 5.")
+    print("[SUCCESS] Model saved. Proceed to Phase 5.")
 else:
-    print("❌ CV failed safety gate. Do not proceed.")
+    print("[ERROR] CV failed safety gate. Do not proceed.")
 

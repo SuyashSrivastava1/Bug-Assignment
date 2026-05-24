@@ -230,6 +230,10 @@ class BugAssigner:
         sim_dense = cosine_similarity(new_dense, self._historical_dense)[0]
         sim_sparse = cosine_similarity(new_sparse, self._historical_sparse)[0]
         similarities = (sim_dense * 0.5) + (sim_sparse * 0.5)
+        
+        if bug_idx is not None:
+            similarities[bug_idx] = -1.0  # Prevent self-retrieval
+            
         top_k_indices = similarities.argsort()[-k:][::-1]
 
         # Step 3 — Candidate Extraction
@@ -252,6 +256,9 @@ class BugAssigner:
         knn_affinity = []
         for d in available:
             indices = self._dev_bug_indices.get(d.id, [])
+            if bug_idx is not None:
+                indices = [idx_ for idx_ in indices if idx_ != bug_idx]
+                
             if indices:
                 knn_affinity.append(float(similarities[indices].mean()))
             else:
@@ -267,6 +274,8 @@ class BugAssigner:
         result = []
         for i, dev in enumerate(available):
             dev_indices = self._dev_bug_indices.get(dev.id, [])
+            if bug_idx is not None:
+                dev_indices = [idx_ for idx_ in dev_indices if idx_ != bug_idx]
 
             features = [
                 # Category A: Developer attributes (6)
@@ -428,6 +437,10 @@ class BugAssigner:
         
         # Hybrid score weights both models equally
         similarities = (sim_dense * 0.5) + (sim_sparse * 0.5)
+        
+        if bug_idx is not None:
+            similarities[bug_idx] = -1.0  # Prevent self-retrieval
+            
         top_k_indices = similarities.argsort()[-k:][::-1]
 
         # Step 3 — Candidate Extraction from the top-K similar bugs
@@ -456,6 +469,9 @@ class BugAssigner:
         knn_affinity: list[float] = []
         for d in available:
             indices = self._dev_bug_indices.get(d.id, [])
+            if bug_idx is not None:
+                indices = [idx_ for idx_ in indices if idx_ != bug_idx]
+                
             if indices:
                 aff = float(similarities[indices].mean())
             else:
