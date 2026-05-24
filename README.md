@@ -1,5 +1,11 @@
 # Bug-to-Developer Assignment System
 
+> [!NOTE]
+> **Branch: `semantic-prototype-weights`**
+> This experimental branch replaces the basic keyword-matching for assigning weights (urgency, complexity, routine) with a **Continuous 6-Prototype Semantic Embedding** approach. It maps the bug's description against 6 specific prototype phrases to continuously and organically bend the assignment weights without relying on discrete keywords.
+> 
+> *Test Accuracy: ~22.00% Top-1*
+
 An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (Dense Embeddings with Sentence-Transformers + KNN) and **Multi-Criteria Decision Making** (Weighted Sum Model).
 
 ## Quick Start
