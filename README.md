@@ -1,6 +1,6 @@
 # Bug-to-Developer Assignment System
 
-An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (Dense Embeddings with Sentence-Transformers + KNN) and **Multi-Criteria Decision Making** (Weighted Sum Model).
+An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (Dense/Sparse Embeddings + KNN) and a **Learning-to-Rank (LTR) XGBoost Model**.
 
 ## Quick Start
 
@@ -18,209 +18,140 @@ You will be prompted to choose a mode:
 
 ---
 
-### Example — GitHub Mode
-
-```
-> 1
-Paste a GitHub issue URL:
-> https://github.com/facebook/react/issues/36469
-
-[1/3] Fetching issue #36469 from facebook/react...
-[2/3] Building developer pool from facebook/react history...
-[3/3] Finding best developer...
---------------------------------------------------
-  [NLP Signals Detected]
-  Urgency    : 0.33  (crash)
-  Complexity : 0.00
-  Routine    : 0.00
-  Severity   : 1.00  Effective Urgency: 0.72
-
-  [Computed Weights for this Bug]
-  Experience     0.108  ###
-  Fix Time       0.361  ##########
-  Success Rate   0.108  ###
-  Workload       0.072  ##
-  Domain Skill   0.351  ##########
-
-  BEST MATCH : eps1lon
-  Score      : 1.000
-  Bugs Fixed : 5
-  Avg Fix    : 11.5 hours
-
-  Other Candidates:
-    - rickhanlonii                   score=0.800  bugs_fixed=1
-    - gnoff                          score=0.762  bugs_fixed=1
-```
-
-### Example — Custom Mode
-
-```
-> 2
-> Memory leak in the worker thread pool causing high CPU usage
-
-  [NLP Signals Detected]
-  Urgency    : 0.00
-  Complexity : 0.67  (memory, leak, threading)
-  Routine    : 0.00
-  Severity   : 0.50  Effective Urgency: 0.25
-
-  [Computed Weights for this Bug]
-  Experience     0.240  #######
-  Fix Time       0.176  #####
-  Success Rate   0.215  ######
-  Workload       0.161  ####
-  Domain Skill   0.209  ######
-
-  BEST MATCH : Tod Creasey
-  Score      : 0.693
-```
-
----
-
 ## How the Algorithm Works
 
-### 7-Step Pipeline
+### The Pipeline
 
 ```
 New Bug Report
       │
       ▼
-1. Dense Embeddings       ──► Convert bug description text into a numeric feature vector using `all-MiniLM-L6-v2`
+1. Dense+Sparse Embeddings ──► Convert bug text into a hybrid dense+sparse feature vector using `all-MiniLM-L6-v2` and TF-IDF
       │
       ▼
-2. KNN Similarity Search  ──► Find the top-K most similar bugs in the historical database using cosine similarity
+2. KNN Similarity Search   ──► Find the top-K most similar historical bugs using hybrid cosine similarity
       │
       ▼
-3. Candidate Extraction  ──► Identify the developers who fixed those similar bugs
+3. Candidate Extraction    ──► Identify the developers who fixed those similar bugs
       │
       ▼
-4. Hard Filtering        ──► Remove developers who are on leave or over 95% workload
+4. Hard Filtering          ──► Remove developers who are on leave or over 95% workload
       │
       ▼
-5. Attribute Matrix      ──► Build a matrix of 5 performance metrics for each candidate
+5. Feature Engineering     ──► Build a matrix of 19 features (candidate metrics, component match, severity, prototype semantic scores)
       │
       ▼
-6. NLP Dynamic Weighting ──► Analyse bug text to compute a UNIQUE weight vector per bug
+6. Learning-To-Rank        ──► Pass features into an XGBoost Ranker (`objective: rank:ndcg`) to score each candidate
       │
       ▼
-7. WSM + Ranking         ──► Normalise, compute utility scores, return ranked list
+7. Final Assignment        ──► Return the highest scored candidate from XGBoost
 ```
 
-### The 5 Developer Metrics
+### The Feature Space (19 Features)
 
-| Metric | Type | Source |
-|---|---|---|
-| **Experience** | Benefit ↑ | Total bugs historically fixed |
-| **Fix Time** | Cost ↓ | Average hours to close a bug |
-| **Success Rate** | Benefit ↑ | % of bugs not re-opened |
-| **Workload** | Cost ↓ | Current open issue load (0–100%) |
-| **Domain Skill** | Benefit ↑ | Number of distinct components worked on |
+The XGBoost Ranker uses 19 distinct features to evaluate each candidate:
 
-### Per-Bug Dynamic Weight Engine
+1. **Category A: Candidate Static Metrics (6)**
+   * **Experience**: Total bugs historically fixed
+   * **Fix Time**: Average hours to close a bug
+   * **Success Rate**: % of bugs not re-opened
+   * **Workload**: Current open issue load (0–100%)
+   * **Domain Skill**: Number of distinct components worked on
+   * **KNN Affinity**: Mean cosine similarity between the current query bug and all past bugs this candidate has fixed
 
-Unlike traditional systems that pick from a fixed lookup table (e.g. "critical → fast fix"), this system reads the actual text of every bug report and computes a **unique weight vector** for each one.
+2. **Category B: Developer-Bug Interaction (4)**
+   * **Component Match**: Boolean (1.0/0.0) if the candidate previously worked on this bug's module
+   * **Num Past Bugs Fixed**: Count of past bugs fixed (excluding the current one during training)
+   * **Cosine Sim Max**: Max similarity score to the candidate's past bugs
+   * **Cosine Sim Mean**: Mean similarity score to the candidate's past bugs
 
-Three NLP signals are extracted from the bug description:
+3. **Category C: Bug Context (3)**
+   * **Severity Flags**: Binary flags for `is_critical`, `is_normal`, `is_minor`
 
-| Signal | Example Keywords | Effect |
-|---|---|---|
-| **Urgency** | `crash`, `outage`, `production`, `security`, `500` | Increases weight on **Fix Time** and **Domain Skill** |
-| **Complexity** | `memory leak`, `threading`, `deadlock`, `algorithm` | Increases weight on **Experience** and **Success Rate** |
-| **Routine** | `typo`, `css`, `alignment`, `padding`, `cosmetic` | Increases weight on **Workload** (assign to least busy dev) |
-
-**Severity** acts as a continuous amplifier (critical=1.0, normal=0.5, minor=0.0) that boosts the urgency signal — it does not select from a fixed table.
-
-This means two bugs with the same severity label get different weights if their descriptions differ. A *"production database deadlock crash"* and a *"production crash on the login page"* are both `critical` but will correctly receive different weight distributions.
-
-### Why Eclipse + Bugzilla + GitHub Together?
-
-When routing a GitHub bug, the system uses **three data sources**:
-
-| Source | Role | Size |
-|---|---|---|
-| **Eclipse dataset** (`data/eclipse/`) | NLP context — enriches semantic vocabulary with structured bug reports | ~10,000 bugs |
-| **Bugzilla corpus** (`data/bugzilla/`) | NLP context — adds 35,000+ diverse open-source bug descriptions from 50+ projects | ~35,000+ entries |
-| **GitHub repo history** | Candidate pool — the **only** source of actual developers | Project-specific |
-
-The NLP context sources improve semantic matching without ever adding Eclipse or Bugzilla developers to the candidate pool. Only real contributors from the target GitHub project are ever recommended.
+4. **Category D: Semantic Prototype Scores (6)**
+   * Continuous NLP signals computed by comparing the bug's dense embedding to 6 predefined semantic "prototype" sentences (e.g. *critical production crash*, *complex algorithm memory leak*, *routine UI alignment*). These act as a continuous semantic hash that helps the XGBoost model learn non-linear relationships based on bug context.
 
 ---
 
-## Evaluation Results
+## 📈 Evaluation & Research Results
 
-Evaluated on an 80/20 train/test split of the Eclipse dataset (9,800 train / 2,000 test bugs, 209 developers):
+Throughout the development of this assignment system, we iterated through 5 major architectural approaches. Each was rigorously tested against a standardized hold-out test set of **2,000 Eclipse bugs** against a training index of **8,000 historical bugs** and **209 unique developers**. 
 
-| Metric | Score |
-| :--- | :--- |
-| **Top-1 Accuracy** | 23.00% |
-| **Top-3 Accuracy** | 47.50% |
-| **Top-5 Accuracy** | 63.00% |
-| **Mean Reciprocal Rank (MRR)** | 0.397 |
+The **Learning-to-Rank** model successfully generalized the patterns and definitively dominated all previous heuristic and semantic approaches!
 
-*What these mean: Top-5 accuracy of 63.00% means that 63% of the time, the correct developer who actually fixed the bug was ranked in the top 5 candidates suggested by the model.*
+| Metric | `main` (Baseline) | `accuracy-improvements` | `hybrid-search` | `semantic-prototype-weights` | `learning-to-rank` (XGBoost) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Top-1 Accuracy** | 22.50% | 22.50% | 23.00% | 22.00% | **26.00%** 🏆 |
+| **Top-3 Accuracy** | 51.50% | 48.50% | 47.50% | 49.50% | **59.50%** 🏆 |
+| **Top-5 Accuracy** | 55.50% | 63.50% | 63.00% | 65.00% | **74.85%** 🏆 |
+| **MRR** | 0.3614 | 0.3894 | 0.3974 | 0.3954 | **0.4437** 🏆 |
 
-## Architecture
-
-1. **Feature Extraction (Hybrid NLP)**: Bug descriptions are embedded using **both** a dense semantic model (`SentenceTransformers: all-MiniLM-L6-v2`) and a sparse lexical model (`TfidfVectorizer`). This hybrid approach combines deep semantic meaning with exact keyword matching.
-2. **Hybrid KNN Search**: We find the K=20 most similar historical bugs by blending cosine similarities from both models.
+### Data Leakage Discovery & Fix
+During the development of the Learning-to-Rank pipeline, cross-validation metrics initially spiked to an impossible `99.68%`. This was caused by self-retrieval data leakage: the historical feature builder allowed training bugs to query themselves, artificially inflating the `cosine_sim_max` feature to `1.0`. Masking the bug's own index during the similarity search and candidate aggregation successfully removed this leak, resulting in the clean, highly-generalized **26.00%** real-world Top-1 test accuracy shown above.
 
 Run the evaluation yourself:
 
 ```bash
 python test_model.py           # Full evaluation (~2,000 test bugs)
 python test_model.py --quick   # Fast evaluation (200 test bugs)
-python test_model.py --unit-only  # Unit + edge case tests only, no CSV needed
+python test_model.py --unit-only  # Unit + edge case tests only
 ```
+
+### Training the LTR Model
+
+To retrain the XGBoost ranker on the dataset:
+```bash
+python train_ltr.py
+```
+This script runs a pipeline that replays the hybrid search over the training bugs, extracts the 19 features for the candidates, masks the queries to prevent data leakage, runs a 5-Fold Cross Validation, and saves the final production model to `models/ltr_ranker.json`.
 
 ---
 
 ## Project Structure
 
-```
+```text
 Bug Classification/
 │
 ├── src/                        # All source code
 │   ├── models/
 │   │   ├── bug.py              # Bug data class
-│   │   ├── developer.py        # Developer data class (5 metrics)
-│   │   └── assigner.py         # Core algorithm: Dense Embeddings, KNN, dynamic weights, WSM
+│   │   ├── developer.py        # Developer data class
+│   │   ├── assigner.py         # Core algorithm pipeline
+│   │   ├── ltr_data_builder.py # Extracts LTR feature matrices
+│   │   └── ltr_trainer.py      # XGBoost training & CV logic
 │   │
 │   ├── loaders/
-│   │   ├── base.py             # Shared utilities: map_severity(), build_developers()
+│   │   ├── base.py             # Shared utilities
 │   │   ├── csv_loader.py       # Load from Eclipse CSV dataset
-│   │   ├── bugzilla_loader.py  # Load from Bugzilla corpus .txt (NLP context only)
+│   │   ├── bugzilla_loader.py  # Load from Bugzilla corpus .txt
 │   │   └── github_loader.py    # Load from GitHub REST API (issues + PRs)
 │   │
-│   └── router.py               # Pipeline coordinator: ties all components together
+│   └── router.py               # Pipeline coordinator
 │
-├── data/                       # Local datasets (gitignored — download separately)
+├── models/
+│   ├── ltr_ranker.json         # Compiled XGBoost model
+│   └── ltr_ranker.meta.json    # Training metadata
+│
+├── data/                       # Local datasets
 │   ├── eclipse/
-│   │   └── final dataset for work ecllipse.csv   # kaggle.com/datasets/ehsanb/eclipse-bug-reports
+│   │   └── final dataset for work ecllipse.csv
 │   └── bugzilla/
-│       └── corpus (fixsev).txt                   # kaggle.com/datasets/qicongliu/bugzilla-bug-reports
+│       └── corpus (fixsev).txt
 │
-├── documentation/              # Reference research papers
-├── main.py                     # Entry point — run this
-├── test_model.py               # Evaluation suite (unit, edge case, accuracy tests)
+├── main.py                     # CLI Entry point
+├── test_model.py               # Evaluation suite
+├── train_ltr.py                # LTR Training script
 ├── requirements.txt
 └── README.md
 ```
 
-## Adding More NLP Context Datasets
-
-The system is designed to accept additional NLP context datasets with minimal code changes.  To add a new source:
-
-1. Write a loader in `src/loaders/` that returns `(list[Bug], {})` (empty dev_stats).
-2. Call it inside `Router._load_nlp_context()` in `src/router.py` and append to `context_bugs`.
-3. The Dense Embedding model will automatically incorporate the new vocabulary context.
-
-No changes to the algorithm, weights, or candidate pool logic are needed.
-
 ## Requirements
 
-```
+```text
 numpy
 sentence-transformers
+xgboost
+scikit-learn
 ```
 
 Install with:
@@ -229,9 +160,3 @@ pip install -r requirements.txt
 ```
 
 No API keys required. The GitHub API is used anonymously (rate limit: 60 requests/hour).
-
-**Dataset setup** — place the following files before running CSV/accuracy tests:
-- `data/eclipse/final dataset for work ecllipse.csv` — [Eclipse Bug Reports on Kaggle](https://kaggle.com/datasets/ehsanb/eclipse-bug-reports)
-- `data/bugzilla/corpus (fixsev).txt` — [Bugzilla Bug Reports on Kaggle](https://kaggle.com/datasets/qicongliu/bugzilla-bug-reports)
-
-Both datasets are optional — the system degrades gracefully if either file is missing.
