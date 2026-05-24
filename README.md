@@ -1,5 +1,11 @@
 # Bug-to-Developer Assignment System
 
+> [!NOTE]
+> **Branch: `main` (The Baseline)**
+> This is the original baseline implementation of the assignment system. It uses **Sparse TF-IDF embeddings** for similarity search and a **static Weighted Sum Model (WSM)** for candidate ranking. 
+> 
+> *Test Accuracy: ~22.50% Top-1*
+
 An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (TF-IDF + KNN) and **Multi-Criteria Decision Making** (Weighted Sum Model).
 
 ## Quick Start
