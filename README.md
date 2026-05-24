@@ -1,5 +1,11 @@
 # Bug-to-Developer Assignment System
 
+> [!NOTE]
+> **Branch: `accuracy-improvements`**
+> This experimental branch introduced dynamic bug severity weights (scaling urgency dynamically rather than using a static lookup table) and heavily optimized the evaluation script latency by utilizing `numpy` vectorization.
+> 
+> *Test Accuracy: ~22.50% Top-1*
+
 An AI-driven framework that automatically assigns software bug reports to the most suitable developer, using a hybrid pipeline of **NLP text analysis** (Dense Embeddings with Sentence-Transformers + KNN) and **Multi-Criteria Decision Making** (Weighted Sum Model).
 
 ## Quick Start
