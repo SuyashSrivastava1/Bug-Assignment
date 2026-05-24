@@ -31,6 +31,7 @@ Advantages over keyword heuristics:
   • Severity is still blended in as a multiplicative signal on the relevant prototypes.
 """
 
+import os
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -135,12 +136,26 @@ class BugAssigner:
         # Per-developer lookup tables built at fit() time
         self._dev_bug_indices: dict[int, list[int]] = {}  # dev_id -> [hist indices]
         self._dev_components: dict[int, set[str]]   = {}  # dev_id -> {module, ...}
+        self._bug_id_to_idx: dict[int, int]         = {}  # bug_id -> hist index
 
         # Pre-encode the 6 prototype sentences once at init time.
         # Shape: (6, embedding_dim) — reused for every assign() call.
         self._prototype_vectors = self._dense_model.encode(
             PROTOTYPE_SENTENCES, show_progress_bar=False
         )
+        
+        # LTR Specific additions
+        self._ltr_model = None          # XGBRanker, loaded if available
+        self._use_ltr = False           # A/B switch
+        self._ltr_confidence_min = 0.1  # minimum score gap to trust LTR
+
+    def load_ltr_model(self, path: str):
+        """Load a trained LTR model. Call after fit()."""
+        import xgboost as xgb
+        self._ltr_model = xgb.XGBRanker()
+        self._ltr_model.load_model(path)
+        self._use_ltr = True
+        print(f"[LTR] Model loaded from {path}")
 
     # ------------------------------------------------------------------
     # Training
@@ -170,7 +185,9 @@ class BugAssigner:
         # (Eclipse / Bugzilla) are not in resolutions so they are skipped.
         self._dev_bug_indices = {}
         self._dev_components  = {}
+        self._bug_id_to_idx   = {}
         for idx, bug in enumerate(historical_bugs):
+            self._bug_id_to_idx[bug.id] = idx
             dev_id = resolutions.get(bug.id)
             if dev_id is None:
                 continue
@@ -186,8 +203,187 @@ class BugAssigner:
         self._historical_sparse = self._sparse_model.fit_transform(corpus)
 
     # ------------------------------------------------------------------
+    # LTR Utilities
+    # ------------------------------------------------------------------
+    
+    def _get_candidate_features(self, bug: Bug, k: int = 20) -> list | None:
+        """
+        Run Steps 1-6 of the pipeline and return raw feature vectors
+        per candidate developer. Used by LTR training and inference.
+
+        Returns
+        -------
+        list of (Developer, feature_vector) tuples, or None if no candidates.
+        """
+        if self._historical_dense is None:
+            raise RuntimeError("BugAssigner not trained. Call fit() first.")
+
+        bug_idx = self._bug_id_to_idx.get(bug.id)
+        if bug_idx is not None:
+            new_dense = self._historical_dense[bug_idx:bug_idx+1]
+            new_sparse = self._historical_sparse[bug_idx]
+        else:
+            new_dense = self._dense_model.encode([bug.description])
+            new_sparse = self._sparse_model.transform([bug.description])
+
+        # Step 2 — Hybrid Similarity
+        sim_dense = cosine_similarity(new_dense, self._historical_dense)[0]
+        sim_sparse = cosine_similarity(new_sparse, self._historical_sparse)[0]
+        similarities = (sim_dense * 0.5) + (sim_sparse * 0.5)
+        top_k_indices = similarities.argsort()[-k:][::-1]
+
+        # Step 3 — Candidate Extraction
+        candidate_ids = set()
+        for idx in top_k_indices:
+            b = self._historical_bugs[idx]
+            if b.id in self._resolutions:
+                candidate_ids.add(self._resolutions[b.id])
+
+        # Step 4 — Hard Filtering
+        available = [
+            d for d in self._developers
+            if d.id in candidate_ids and not d.on_leave and d.workload < 0.95
+        ]
+
+        if not available:
+            return None
+
+        # Step 5 — KNN Affinity
+        knn_affinity = []
+        for d in available:
+            indices = self._dev_bug_indices.get(d.id, [])
+            if indices:
+                knn_affinity.append(float(similarities[indices].mean()))
+            else:
+                knn_affinity.append(0.0)
+
+        # Prototype scores (computed once, same for all candidates)
+        text = bug.description + " " + bug.severity
+        bug_vec = self._dense_model.encode([text])
+        raw_sims = cosine_similarity(bug_vec, self._prototype_vectors)[0]
+        prototype_scores = list((raw_sims + 1.0) / 2.0)  # map to [0, 1]
+
+        # Build feature vectors
+        result = []
+        for i, dev in enumerate(available):
+            dev_indices = self._dev_bug_indices.get(dev.id, [])
+
+            features = [
+                # Category A: Developer attributes (6)
+                dev.experience,
+                dev.fix_time,
+                dev.success_rate,
+                dev.workload,
+                dev.domain_skill,
+                knn_affinity[i],
+
+                # Category B: Bug-Developer interaction (4)
+                1.0 if bug.module in self._dev_components.get(dev.id, set()) else 0.0,
+                float(len(dev_indices)),
+                float(similarities[dev_indices].max()) if dev_indices else 0.0,
+                float(similarities[dev_indices].mean()) if dev_indices else 0.0,
+
+                # Category C: Bug context (3)
+                1.0 if bug.severity == "critical" else 0.0,
+                1.0 if bug.severity == "normal" else 0.0,
+                1.0 if bug.severity == "minor" else 0.0,
+
+                # Category D: Prototype scores (6)
+                *prototype_scores,
+            ]
+
+            result.append((dev, features))
+
+        return result
+        
+    def _assign_ltr(self, bug, available, similarities, k):
+        """Score candidates using the trained LTR model with confidence fallback."""
+
+        candidate_data = self._get_candidate_features(bug, k)
+        if candidate_data is None:
+            return None, [], None, {}
+
+        devs = [d for d, _ in candidate_data]
+        X = np.array([f for _, f in candidate_data], dtype=float)
+
+        # LTR prediction
+        scores = self._ltr_model.predict(X)
+
+        # ---- CONFIDENCE CHECK (Safety Rule S3) ----
+        sorted_scores = np.sort(scores)[::-1]
+        score_gap = None
+        if len(sorted_scores) >= 2:
+            score_gap = sorted_scores[0] - sorted_scores[1]
+            if score_gap < self._ltr_confidence_min:
+                # Model is not confident → fall back to WSM
+                return self._assign_wsm_fallback(bug, available, similarities)
+
+        # Rank by LTR scores
+        order = scores.argsort()[::-1]
+        ranked = [(devs[i], float(scores[i])) for i in order]
+
+        # Signals for debugging/display
+        weights, signals = self._compute_semantic_weights(bug)
+        signals["ranking_method"] = "ltr"
+        signals["ltr_confidence_gap"] = round(float(score_gap), 4) if len(sorted_scores) >= 2 else None
+
+        return ranked[0][0], ranked, weights, signals
+        
+    def _assign_wsm_fallback(self, bug, available, similarities):
+        # We need the matrix to call WSM
+        knn_affinity = []
+        for d in available:
+            indices = self._dev_bug_indices.get(d.id, [])
+            if indices:
+                knn_affinity.append(float(similarities[indices].mean()))
+            else:
+                knn_affinity.append(0.0)
+
+        matrix = np.array(
+            [
+                [d.experience, d.fix_time, d.success_rate, d.workload, d.domain_skill, knn_affinity[i]]
+                for i, d in enumerate(available)
+            ],
+            dtype=float,
+        )
+        return self._assign_wsm(bug, available, similarities, matrix, 20)
+
+    # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
+
+    def _assign_wsm(self, new_bug, available, similarities, matrix, k):
+        # Step 7 — Semantic Prototype Weight Computation (unique for every bug)
+        weights, signals = self._compute_semantic_weights(new_bug)
+
+        # Step 8a — Min-Max Normalisation + Weighted Sum Model (WSM)
+        mins = matrix.min(axis=0)
+        maxs = matrix.max(axis=0)
+        norm = np.zeros_like(matrix)
+
+        for j in range(matrix.shape[1]):
+            rng = maxs[j] - mins[j]
+            if rng == 0:
+                norm[:, j] = 1.0   # all equal -> full score for everyone
+            elif j in BENEFIT_COLS:
+                norm[:, j] = (matrix[:, j] - mins[j]) / rng
+            else:                  # cost column: invert so lower is better
+                norm[:, j] = (maxs[j] - matrix[:, j]) / rng
+
+        scores = norm @ weights
+
+        # Step 8b — Component Match Bonus
+        # A developer who has previously fixed bugs in the same module as this
+        # bug gets a 10% score boost — they have demonstrated domain familiarity.
+        for i, d in enumerate(available):
+            if new_bug.module in self._dev_components.get(d.id, set()):
+                scores[i] *= 1.1
+
+        order  = scores.argsort()[::-1]
+        ranked = [(available[i], float(scores[i])) for i in order]
+
+        return ranked[0][0], ranked, weights, signals
+
 
     def assign(self, new_bug: Bug, k: int = 20) -> tuple:
         """
@@ -213,9 +409,17 @@ class BugAssigner:
         if self._historical_dense is None or self._historical_sparse is None:
             raise RuntimeError("BugAssigner has not been trained yet. Call fit() first.")
 
+        # Check for A/B switch
+        use_ltr = self._use_ltr and os.environ.get("DISABLE_LTR") != "1"
+
         # Step 1 — Feature Extraction (dense semantic + sparse lexical)
-        new_dense = self._dense_model.encode([new_bug.description])
-        new_sparse = self._sparse_model.transform([new_bug.description])
+        bug_idx = self._bug_id_to_idx.get(new_bug.id)
+        if bug_idx is not None:
+            new_dense = self._historical_dense[bug_idx:bug_idx+1]
+            new_sparse = self._historical_sparse[bug_idx]
+        else:
+            new_dense = self._dense_model.encode([new_bug.description])
+            new_sparse = self._sparse_model.transform([new_bug.description])
 
         # Step 2 — Hybrid Similarity Search
         # Combine dense semantic similarity with sparse lexical exact-matching
@@ -267,37 +471,21 @@ class BugAssigner:
             ],
             dtype=float,
         )
+        
+        # Dual logging during development
+        # wsm_result = self._assign_wsm(new_bug, available, similarities, matrix, k)
+        # if use_ltr and self._ltr_model is not None:
+        #    ltr_result = self._assign_ltr(new_bug, available, similarities, k)
+        #    if wsm_result[0] and ltr_result[0] and wsm_result[0].id != ltr_result[0].id:
+        #        print(f"[DISAGREE] Bug {new_bug.id}: WSM→{wsm_result[0].id}, LTR→{ltr_result[0].id}")
 
-        # Step 7 — Semantic Prototype Weight Computation (unique for every bug)
-        weights, signals = self._compute_semantic_weights(new_bug)
+        if use_ltr and self._ltr_model is not None:
+            # ---- LTR PATH ----
+            return self._assign_ltr(new_bug, available, similarities, k)
+        else:
+            # ---- WSM PATH (existing code, untouched) ----
+            return self._assign_wsm(new_bug, available, similarities, matrix, k)
 
-        # Step 8a — Min-Max Normalisation + Weighted Sum Model (WSM)
-        mins = matrix.min(axis=0)
-        maxs = matrix.max(axis=0)
-        norm = np.zeros_like(matrix)
-
-        for j in range(matrix.shape[1]):
-            rng = maxs[j] - mins[j]
-            if rng == 0:
-                norm[:, j] = 1.0   # all equal -> full score for everyone
-            elif j in BENEFIT_COLS:
-                norm[:, j] = (matrix[:, j] - mins[j]) / rng
-            else:                  # cost column: invert so lower is better
-                norm[:, j] = (maxs[j] - matrix[:, j]) / rng
-
-        scores = norm @ weights
-
-        # Step 8b — Component Match Bonus
-        # A developer who has previously fixed bugs in the same module as this
-        # bug gets a 10% score boost — they have demonstrated domain familiarity.
-        for i, d in enumerate(available):
-            if new_bug.module in self._dev_components.get(d.id, set()):
-                scores[i] *= 1.1
-
-        order  = scores.argsort()[::-1]
-        ranked = [(available[i], float(scores[i])) for i in order]
-
-        return ranked[0][0], ranked, weights, signals
 
     # ------------------------------------------------------------------
     # Semantic Prototype Weighting
