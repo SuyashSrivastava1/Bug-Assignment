@@ -4,5 +4,5 @@
   "n_positive": 9800,
   "n_features": 19,
   "avg_candidates_per_bug": 9.0,
-  "trained_at": "2026-05-24T15:43:06.653907"
+  "trained_at": "2026-05-24T16:34:42.050418"
 }

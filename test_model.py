@@ -367,6 +367,10 @@ else:
     assigner_eval = BugAssigner()
     assigner_eval.fit(train_bugs, all_devs, all_resolutions)
 
+    ltr_model_path = Path("models") / "ltr_ranker.json"
+    if ltr_model_path.exists():
+        assigner_eval.load_ltr_model(str(ltr_model_path))
+
     # -----------------------------------------------------------------------
     # Evaluate
     # -----------------------------------------------------------------------
