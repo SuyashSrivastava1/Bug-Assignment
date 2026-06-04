@@ -101,7 +101,7 @@ python test_model.py --unit-only  # Unit + edge case tests only
 
 To retrain the XGBoost ranker on the dataset:
 ```bash
-python train_ltr.py
+python scripts/train_ltr.py
 ```
 This script runs a pipeline that replays the hybrid search over the training bugs, extracts the 19 features for the candidates, masks the queries to prevent data leakage, runs a 5-Fold Cross Validation, and saves the final production model to `models/ltr_ranker.json`.
 
@@ -138,9 +138,13 @@ Bug Classification/
 │   └── bugzilla/
 │       └── corpus (fixsev).txt
 │
+├── scripts/                    # Utility and evaluation scripts
+│   ├── train_ltr.py            # LTR Training script
+│   ├── compare_models.py       # Compare WSM and LTR side-by-side
+│   └── run_eval.py             # Multi-project evaluation script
+│
 ├── main.py                     # CLI Entry point
 ├── test_model.py               # Evaluation suite
-├── train_ltr.py                # LTR Training script
 ├── requirements.txt
 └── README.md
 ```

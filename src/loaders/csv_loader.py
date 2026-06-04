@@ -8,16 +8,21 @@ Expected CSV columns:
 
 Returns
 -------
-bugs        : list[Bug]   — all valid assigned bugs from the file.
-dev_stats   : dict        — aggregated developer metrics (input to base.build_developers).
+bugs      : list[Bug]  — all valid assigned bugs from the file.
+dev_stats : dict       — aggregated developer metrics (input to base.build_developers).
 """
+
+from __future__ import annotations
 
 import csv
 import datetime
+import logging
 from pathlib import Path
 
 from src.models.bug import Bug
 from src.loaders.base import map_severity
+
+logger = logging.getLogger(__name__)
 
 # Default path relative to the project root
 DEFAULT_CSV_PATH = Path("data") / "eclipse" / "final dataset for work ecllipse.csv"
@@ -34,6 +39,10 @@ def load(filepath: str | Path = DEFAULT_CSV_PATH) -> tuple[list[Bug], dict]:
     Returns
     -------
     (bugs, dev_stats)
+
+    Raises
+    ------
+    FileNotFoundError if the file does not exist.
     """
     filepath = Path(filepath)
     if not filepath.exists():
@@ -44,24 +53,21 @@ def load(filepath: str | Path = DEFAULT_CSV_PATH) -> tuple[list[Bug], dict]:
 
     with open(filepath, mode="r", encoding="utf-8", errors="replace") as fh:
         reader = csv.DictReader(fh)
-
         for row in reader:
-            bug_id  = row.get("Bug ID", "").strip()
-            summary = row.get("Summary", "").strip()
+            bug_id   = row.get("Bug ID", "").strip()
+            summary  = row.get("Summary", "").strip()
             assignee = (row.get("Assignee Real Name") or row.get("Assignee", "")).strip()
 
-            # Skip rows with missing core fields
             if not bug_id or not summary or not assignee:
                 continue
 
             severity  = map_severity(row.get("Severity", "normal"))
             component = (row.get("Component") or "general").strip()
+            fix_time_hours = _parse_fix_time(
+                row.get("Opened", ""), row.get("Changed", "")
+            )
 
-            # Calculate fix time from timestamps
-            fix_time_hours = _parse_fix_time(row.get("Opened", ""), row.get("Changed", ""))
-
-            bug = Bug(id=bug_id, description=summary, severity=severity, module=component)
-            bugs.append(bug)
+            bugs.append(Bug(id=bug_id, description=summary, severity=severity, module=component))
 
             if assignee not in dev_stats:
                 dev_stats[assignee] = {
@@ -77,8 +83,14 @@ def load(filepath: str | Path = DEFAULT_CSV_PATH) -> tuple[list[Bug], dict]:
             dev_stats[assignee]["components"].add(component)
             dev_stats[assignee]["resolved_bug_ids"].append(bug_id)
 
-    print(f"[CSV Loader] Loaded {len(bugs)} bugs from {filepath.name} "
-          f"({len(dev_stats)} unique developers)")
+    logger.info(
+        "[CSV Loader] Loaded %d bugs from %s (%d unique developers).",
+        len(bugs), filepath.name, len(dev_stats),
+    )
+    print(
+        f"[CSV Loader] Loaded {len(bugs):,} bugs from {filepath.name} "
+        f"({len(dev_stats):,} unique developers)"
+    )
     return bugs, dev_stats
 
 
@@ -86,8 +98,12 @@ def load(filepath: str | Path = DEFAULT_CSV_PATH) -> tuple[list[Bug], dict]:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _parse_fix_time(opened: str, changed: str, fallback_hours: float = 24.0) -> float:
-    """Return the number of hours between two timestamp strings."""
+def _parse_fix_time(
+    opened: str,
+    changed: str,
+    fallback_hours: float = 24.0,
+) -> float:
+    """Return the number of hours elapsed between two timestamp strings."""
     fmt = "%Y-%m-%d %H:%M:%S"
     try:
         t0 = datetime.datetime.strptime(opened.strip(), fmt)

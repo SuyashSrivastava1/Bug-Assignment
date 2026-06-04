@@ -3,7 +3,24 @@ src/models/ltr_data_builder.py
 
 Builds training data for the Learning-to-Rank model by replaying the
 assignment pipeline on historical bugs with known resolutions.
+
+Feature Vector (19 dimensions)
+-------------------------------
+Category A — Developer static attributes (6):
+    experience, fix_time, success_rate, workload, domain_skill, knn_affinity
+
+Category B — Bug-developer interaction (4):
+    component_match, num_past_bugs_fixed, cosine_sim_max, cosine_sim_mean
+
+Category C — Bug severity flags (3):
+    severity_is_critical, severity_is_normal, severity_is_minor
+
+Category D — Semantic prototype similarity scores (6):
+    proto_experience, proto_fix_time, proto_success_rate,
+    proto_workload, proto_domain_skill, proto_knn_affinity
 """
+
+from __future__ import annotations
 
 import numpy as np
 from src.models.bug import Bug
@@ -16,7 +33,7 @@ class LTRDataBuilder:
     and builds (features, labels, groups) suitable for XGBRanker.
     """
 
-    def __init__(self, assigner):
+    def __init__(self, assigner) -> None:
         """
         Parameters
         ----------
@@ -92,28 +109,30 @@ class LTRDataBuilder:
 
         return X, y, groups, feature_names
 
-    def _get_feature_names(self) -> list:
-        """Return ordered feature column names."""
+    def _get_feature_names(self) -> list[str]:
+        """Return the ordered feature column names matching the 19-dim feature vector."""
         return [
-            # Original 6 attributes
+            # Category A: Developer static attributes (6)
             "experience",
             "fix_time",
             "success_rate",
             "workload",
             "domain_skill",
             "knn_affinity",
-            # Extended features (Phase 3)
+            # Category B: Bug-developer interaction (4)
             "component_match",
-            "severity_is_critical",
-            "severity_is_normal",
-            "severity_is_minor",
             "num_past_bugs_fixed",
             "cosine_sim_max",
             "cosine_sim_mean",
-            "prototype_experience",
-            "prototype_fix_time",
-            "prototype_success_rate",
-            "prototype_workload",
-            "prototype_domain_skill",
-            "prototype_knn_affinity",
+            # Category C: Bug severity one-hot flags (3)
+            "severity_is_critical",
+            "severity_is_normal",
+            "severity_is_minor",
+            # Category D: Semantic prototype similarity scores (6)
+            "proto_experience",
+            "proto_fix_time",
+            "proto_success_rate",
+            "proto_workload",
+            "proto_domain_skill",
+            "proto_knn_affinity",
         ]

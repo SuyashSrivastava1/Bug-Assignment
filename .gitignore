@@ -1,16 +1,28 @@
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
 
-# Legacy archive folder (replaced by data/)
-archive/
-archive.zip
+# ── Environment ───────────────────────────────────────────────────────────────
+.env
+.venv/
+venv/
+ENV/
+env/
 
-# Bugzilla dataset downloaded at root level (user extracted here)
-bugzilla/
-bugzilla.zip
+# ── Logs & temp ───────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
 
-# Local data files — too large for git
-# Download these manually and place at the paths below:
+# ── Datasets — too large for git ──────────────────────────────────────────────
+# Download and place at the paths below before running:
 #
 #   data/eclipse/final dataset for work ecllipse.csv
 #       Source: kaggle.com/datasets/ehsanb/eclipse-bug-reports
@@ -19,3 +31,33 @@ bugzilla.zip
 #       Source: kaggle.com/datasets/qicongliu/bugzilla-bug-reports
 #
 data/
+
+# ── Raw data directories (user extraction locations) ─────────────────────────
+# These are kept at the project root when the user downloads and extracts
+# datasets manually. The pipeline reads from data/ — not these folders.
+bugzilla/
+bugzilla.zip
+bughub-master/
+msr2013-bug_dataset-master/
+
+# ── Legacy / archive ──────────────────────────────────────────────────────────
+archive/
+archive.zip
+
+# ── NumPy array caches ────────────────────────────────────────────────────────
+*.npy
+*.npz
+
+# ── Documentation (LaTeX papers & dev journal — kept local) ──────────────────
+documentation/
+docs/
+
+# ── Experiment results (generated locally) ────────────────────────────────────
+results/
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.DS_Store
+Thumbs.db

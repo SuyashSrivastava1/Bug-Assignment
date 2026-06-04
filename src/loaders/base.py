@@ -1,22 +1,30 @@
 """
 src/loaders/base.py
 
-Shared helpers used by every data loader:
-  - map_severity()      : Normalises raw severity strings to 'critical'/'normal'/'minor'.
-  - build_developers()  : Converts a dev_stats dict into Developer objects + a resolutions map.
+Shared utilities used by every data loader:
+  - map_severity()     : Normalises raw severity strings → 'critical' / 'normal' / 'minor'.
+  - build_developers() : Converts a dev_stats dict into Developer objects + a resolutions map.
 
-Every loader returns data in the same format so the router can combine them freely.
+All loaders return data in the same format so the Router can freely combine them.
 """
 
+from __future__ import annotations
+
+import logging
 from src.models.developer import Developer
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Severity mapping
 # ---------------------------------------------------------------------------
 
-_CRITICAL_LABELS = {"blocker", "critical", "crash", "major", "bug"}
-_MINOR_LABELS    = {"trivial", "minor", "enhancement", "feature-request", "feature request"}
+_CRITICAL_LABELS: frozenset[str] = frozenset(
+    {"blocker", "critical", "crash", "major", "bug"}
+)
+_MINOR_LABELS: frozenset[str] = frozenset(
+    {"trivial", "minor", "enhancement", "feature-request", "feature request"}
+)
 
 
 def map_severity(raw: str) -> str:
@@ -29,7 +37,7 @@ def map_severity(raw: str) -> str:
 
     Returns
     -------
-    str — 'critical', 'minor', or 'normal' (default).
+    'critical', 'minor', or 'normal' (default).
     """
     cleaned = (raw or "").lower().strip()
     if cleaned in _CRITICAL_LABELS:
@@ -59,10 +67,9 @@ def build_developers(dev_stats: dict) -> tuple[list[Developer], dict]:
         ...
     }
 
-    All metrics are calculated from real historical data.
-    Missing metrics (success_rate, workload) are set to neutral baselines:
-      - success_rate = 100  (assume fully successful; penalise only when re-open data exists)
-      - workload     = 0    (assume available; can be overridden when live data exists)
+    Missing metrics use neutral baselines:
+      - success_rate = 100  (penalise only when re-open data exists)
+      - workload     = 0    (assume available; override when live data exists)
 
     Returns
     -------
@@ -74,23 +81,21 @@ def build_developers(dev_stats: dict) -> tuple[list[Developer], dict]:
     dev_id = 1
 
     for stats in dev_stats.values():
-        n = stats["bugs_fixed"]
+        n: int = stats["bugs_fixed"]
         if n == 0:
             continue
 
-        experience   = n
-        avg_fix_time = stats["total_fix_time"] / n
-        domain_skill = min(100.0, 50.0 + len(stats["components"]) * 10.0)
-        success_rate = 100.0   # neutral baseline
-        workload     = 0.0     # neutral baseline
+        avg_fix_time: float = stats["total_fix_time"] / n
+        # Domain skill: 50 base + 10 per unique component worked on, capped at 100
+        domain_skill: float = min(100.0, 50.0 + len(stats["components"]) * 10.0)
 
         dev = Developer(
             id=dev_id,
             name=stats["name"],
-            experience=experience,
+            experience=n,
             fix_time=avg_fix_time,
-            success_rate=success_rate,
-            workload=workload,
+            success_rate=100.0,  # neutral baseline
+            workload=0.0,        # neutral baseline
             domain_skill=domain_skill,
         )
         developers.append(dev)
@@ -100,4 +105,5 @@ def build_developers(dev_stats: dict) -> tuple[list[Developer], dict]:
 
         dev_id += 1
 
+    logger.debug("Built %d developers, %d resolution mappings.", len(developers), len(resolutions))
     return developers, resolutions

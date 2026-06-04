@@ -31,7 +31,12 @@ Advantages over keyword heuristics:
   • Severity is still blended in as a multiplicative signal on the relevant prototypes.
 """
 
+from __future__ import annotations
+
 import os
+import logging
+from typing import Optional
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -39,6 +44,26 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from src.models.bug import Bug
 from src.models.developer import Developer
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Named constants — tune these rather than searching for magic numbers
+# ---------------------------------------------------------------------------
+
+# A developer whose normalised workload exceeds this is hard-filtered out
+WORKLOAD_CAP: float = 0.95
+
+# Minimum score gap between rank-1 and rank-2 for the LTR model to be
+# trusted; below this threshold the system falls back to WSM scoring
+LTR_CONFIDENCE_MIN: float = 0.1
+
+# Additive floor applied to every prototype weight before normalisation,
+# ensuring no attribute dimension can ever collapse to zero weight
+PROTOTYPE_WEIGHT_FLOOR: float = 0.05
+
+# Number of nearest-neighbour historical bugs retrieved per query
+DEFAULT_KNN_K: int = 20
 
 
 # ---------------------------------------------------------------------------
@@ -144,17 +169,17 @@ class BugAssigner:
             PROTOTYPE_SENTENCES, show_progress_bar=False
         )
         
-        # LTR Specific additions
-        self._ltr_model = None          # XGBRanker, loaded if available
-        self._use_ltr = False           # A/B switch
-        self._ltr_confidence_min = 0.1  # minimum score gap to trust LTR
+        # LTR specific state
+        self._ltr_model = None       # XGBRanker, loaded if available
+        self._use_ltr: bool = False  # A/B switch: False = WSM, True = LTR
 
-    def load_ltr_model(self, path: str):
-        """Load a trained LTR model. Call after fit()."""
+    def load_ltr_model(self, path: str) -> None:
+        """Load a pre-trained XGBRanker model. Must be called after fit()."""
         import xgboost as xgb
         self._ltr_model = xgb.XGBRanker()
         self._ltr_model.load_model(path)
         self._use_ltr = True
+        logger.info("LTR model loaded from %s", path)
         print(f"[LTR] Model loaded from {path}")
 
     # ------------------------------------------------------------------
@@ -323,8 +348,12 @@ class BugAssigner:
         score_gap = None
         if len(sorted_scores) >= 2:
             score_gap = sorted_scores[0] - sorted_scores[1]
-            if score_gap < self._ltr_confidence_min:
-                # Model is not confident → fall back to WSM
+            if score_gap < LTR_CONFIDENCE_MIN:
+                # Confidence gap too small — fall back to WSM for safety
+                logger.debug(
+                    "LTR confidence gap %.4f < %.4f — falling back to WSM.",
+                    score_gap, LTR_CONFIDENCE_MIN,
+                )
                 return self._assign_wsm_fallback(bug, available, similarities)
 
         # Rank by LTR scores
@@ -453,11 +482,17 @@ class BugAssigner:
         candidates = [d for d in self._developers if d.id in candidate_ids]
 
         # Step 4 — Hard Filtering (availability + workload cap)
-        available = [d for d in candidates if not d.on_leave and d.workload <= 95]
+        available = [
+            d for d in candidates
+            if not d.on_leave and d.workload <= WORKLOAD_CAP
+        ]
 
         if not available:
-            # Fallback: open pool to all available developers
-            available = [d for d in self._developers if not d.on_leave and d.workload <= 95]
+            # Fallback: widen to all available developers in the pool
+            available = [
+                d for d in self._developers
+                if not d.on_leave and d.workload <= WORKLOAD_CAP
+            ]
 
         if not available:
             return None, [], None, {}
@@ -488,13 +523,6 @@ class BugAssigner:
             dtype=float,
         )
         
-        # Dual logging during development
-        # wsm_result = self._assign_wsm(new_bug, available, similarities, matrix, k)
-        # if use_ltr and self._ltr_model is not None:
-        #    ltr_result = self._assign_ltr(new_bug, available, similarities, k)
-        #    if wsm_result[0] and ltr_result[0] and wsm_result[0].id != ltr_result[0].id:
-        #        print(f"[DISAGREE] Bug {new_bug.id}: WSM→{wsm_result[0].id}, LTR→{ltr_result[0].id}")
-
         if use_ltr and self._ltr_model is not None:
             # ---- LTR PATH ----
             return self._assign_ltr(new_bug, available, similarities, k)
@@ -547,8 +575,8 @@ class BugAssigner:
 
         boosted = raw_scores * severity_boost
 
-        # Add a small floor so no attribute weight ever collapses to zero
-        floored = boosted + 0.05
+        # Add a floor so no attribute weight ever collapses to zero
+        floored = boosted + PROTOTYPE_WEIGHT_FLOOR
 
         # Normalise to sum exactly to 1.0
         weights = floored / floored.sum()

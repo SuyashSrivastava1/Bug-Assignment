@@ -3,20 +3,32 @@ src/loaders/github_loader.py
 
 Loads historical bug data from the GitHub REST API.
 
-Handles two types of GitHub projects:
-  - Projects that use formal Issue Assignees   (e.g. microsoft/vscode)
-  - Projects that use Pull Requests only        (e.g. facebook/react, ungoogled-chromium)
+Supports two project types:
+  - Issue-assignee projects  (e.g. microsoft/vscode)
+  - PR-author projects        (e.g. facebook/react)
 
-For PR-based projects, the PR *author* is treated as the developer who fixed the issue.
+For PR-based projects the PR author is treated as the resolving developer.
+
+Authentication
+--------------
+Set the GITHUB_TOKEN environment variable to use authenticated requests,
+which raises the rate limit from 60 to 5,000 requests/hour:
+
+    $env:GITHUB_TOKEN = "ghp_yourtoken"   # PowerShell
+    export GITHUB_TOKEN="ghp_yourtoken"   # bash/zsh
 
 Returns
 -------
-bugs        : list[Bug]   — resolved issues/PRs with a known developer.
-dev_stats   : dict        — aggregated developer metrics (input to base.build_developers).
+bugs      : list[Bug]  — resolved issues/PRs with a known developer.
+dev_stats : dict       — aggregated developer metrics (input to base.build_developers).
 """
+
+from __future__ import annotations
 
 import datetime
 import json
+import logging
+import os
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -24,8 +36,29 @@ from pathlib import Path
 from src.models.bug import Bug
 from src.loaders.base import map_severity
 
+logger = logging.getLogger(__name__)
+
 _GITHUB_API = "https://api.github.com"
-_HEADERS = {"User-Agent": "BugClassifier/2.0", "Accept": "application/vnd.github+json"}
+
+# ---------------------------------------------------------------------------
+# Build request headers — include token if available
+# ---------------------------------------------------------------------------
+
+def _build_headers() -> dict[str, str]:
+    headers: dict[str, str] = {
+        "User-Agent": "BugAssigner/1.0",
+        "Accept": "application/vnd.github+json",
+    }
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        logger.debug("GitHub: using authenticated requests.")
+    else:
+        logger.warning(
+            "GITHUB_TOKEN not set — using unauthenticated GitHub API "
+            "(60 requests/hour limit). Set GITHUB_TOKEN for 5,000/hour."
+        )
+    return headers
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +80,10 @@ def load(repo: str, limit: int = 100) -> tuple[list[Bug], dict]:
     """
     raw_items = _fetch_closed_items(repo, limit)
     bugs, dev_stats = _process_items(raw_items)
-    print(f"[GitHub Loader] {repo}: {len(bugs)} resolved items, "
-          f"{len(dev_stats)} unique developers")
+    print(
+        f"[GitHub Loader] {repo}: {len(bugs)} resolved items, "
+        f"{len(dev_stats)} unique developers"
+    )
     return bugs, dev_stats
 
 
@@ -74,20 +109,19 @@ def fetch_single_issue(repo: str, issue_number: str | int) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _fetch_closed_items(repo: str, limit: int) -> list[dict]:
-    """Fetch closed issues + PRs from the GitHub API."""
-    # We fetch both issues and PRs in one call (GitHub's issues endpoint returns both)
-    url = f"{_GITHUB_API}/repos/{repo}/issues?state=closed&per_page={min(limit, 100)}"
+    url = (
+        f"{_GITHUB_API}/repos/{repo}/issues"
+        f"?state=closed&per_page={min(limit, 100)}"
+    )
     data = _get(url)
     return data if isinstance(data, list) else []
 
 
 def _process_items(raw_items: list[dict]) -> tuple[list[Bug], dict]:
-    """Extract Bug objects and developer stats from raw GitHub API responses."""
     bugs: list[Bug] = []
     dev_stats: dict = {}
 
     for item in raw_items:
-        # Determine developer: prefer formal assignee, fall back to PR author
         dev_username = _extract_developer(item)
         if not dev_username:
             continue
@@ -96,14 +130,12 @@ def _process_items(raw_items: list[dict]) -> tuple[list[Bug], dict]:
         title       = item.get("title", "")
         body        = item.get("body") or ""
         description = f"{title} {body}".strip()
+        labels      = [lbl["name"].lower() for lbl in item.get("labels", [])]
+        severity    = _severity_from_labels(labels)
+        component   = _component_from_labels(labels)
+        fix_time    = _parse_fix_time(item.get("created_at"), item.get("closed_at"))
 
-        labels    = [lbl["name"].lower() for lbl in item.get("labels", [])]
-        severity  = _severity_from_labels(labels)
-        component = _component_from_labels(labels)
-        fix_time  = _parse_fix_time(item.get("created_at"), item.get("closed_at"))
-
-        bug = Bug(id=bug_id, description=description, severity=severity, module=component)
-        bugs.append(bug)
+        bugs.append(Bug(id=bug_id, description=description, severity=severity, module=component))
 
         if dev_username not in dev_stats:
             dev_stats[dev_username] = {
@@ -124,7 +156,7 @@ def _process_items(raw_items: list[dict]) -> tuple[list[Bug], dict]:
 
 def _extract_developer(item: dict) -> str | None:
     """
-    Return the GitHub username of the developer responsible for closing this item.
+    Return the GitHub username of the developer who closed this item.
 
     Priority:
       1. First formal assignee (used by vscode, angular, golang, etc.)
@@ -133,13 +165,10 @@ def _extract_developer(item: dict) -> str | None:
     assignees = item.get("assignees", [])
     if assignees:
         return assignees[0]["login"]
-
-    # Fall back to the author if this is a PR
     if "pull_request" in item:
         user = item.get("user")
         if user:
             return user["login"]
-
     return None
 
 
@@ -165,22 +194,23 @@ def _parse_fix_time(
 ) -> float:
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     try:
-        t0 = datetime.datetime.strptime(created_at, fmt)
-        t1 = datetime.datetime.strptime(closed_at, fmt)
+        t0 = datetime.datetime.strptime(created_at, fmt)   # type: ignore[arg-type]
+        t1 = datetime.datetime.strptime(closed_at, fmt)    # type: ignore[arg-type]
         return max(0.1, (t1 - t0).total_seconds() / 3600.0)
     except (ValueError, TypeError):
         return fallback_hours
 
 
 def _get(url: str) -> dict | list | None:
-    """Make a GET request to the GitHub API and return parsed JSON."""
-    req = urllib.request.Request(url, headers=_HEADERS)
+    req = urllib.request.Request(url, headers=_build_headers())
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
-        print(f"[GitHub Loader] HTTP {e.code} fetching {url}")
+        logger.error("GitHub API HTTP %d fetching %s", e.code, url)
+        print(f"[GitHub Loader] HTTP {e.code} — {url}")
         return None
     except Exception as e:
-        print(f"[GitHub Loader] Error fetching {url}: {e}")
+        logger.error("GitHub API error fetching %s: %s", url, e)
+        print(f"[GitHub Loader] Error: {e}")
         return None
