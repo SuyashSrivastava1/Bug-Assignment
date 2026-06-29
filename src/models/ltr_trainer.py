@@ -20,6 +20,7 @@ class LTRTrainer:
     DEFAULT_PARAMS = {
         "objective": "rank:ndcg",
         "eval_metric": "ndcg@5",
+        "tree_method": "hist",
         "n_estimators": 150,
         "max_depth": 4,
         "learning_rate": 0.1,

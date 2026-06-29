@@ -55,10 +55,11 @@ class Router:
     best, rankings, weights, signals = router.assign(my_bug)
     """
 
-    def __init__(self):
+    def __init__(self, use_bugzilla: bool = True):
         self._assigner = BugAssigner()
         self._project_developers = []
         self._trained = False
+        self._use_bugzilla = use_bugzilla
 
     # ------------------------------------------------------------------
     # NLP context loader (shared by all training modes)
@@ -73,6 +74,8 @@ class Router:
         are built from these sources.
         """
         context_bugs: list[Bug] = []
+        eclipse_bugs: list[Bug] = []
+        bugzilla_bugs: list[Bug] = []
 
         # -- Eclipse CSV --
         print("[Router] Loading Eclipse dataset for NLP context...")
@@ -82,16 +85,18 @@ class Router:
         except FileNotFoundError:
             print("[Router] Eclipse dataset not found — skipping.")
 
-        # -- Bugzilla corpus --
-        print("[Router] Loading Bugzilla corpus for NLP context...")
-        bugzilla_bugs, _ = bugzilla_loader.load(_BUGZILLA_TXT)
-        context_bugs.extend(bugzilla_bugs)
+        # -- Bugzilla corpus (optional) --
+        if self._use_bugzilla:
+            print("[Router] Loading Bugzilla corpus for NLP context...")
+            bugzilla_bugs, _ = bugzilla_loader.load(_BUGZILLA_TXT)
+            context_bugs.extend(bugzilla_bugs)
+        else:
+            print("[Router] Bugzilla corpus skipped (--no-bugzilla flag set).")
 
         total = len(context_bugs)
         if total:
             print(f"[Router] NLP context: {total:,} bug descriptions total "
-                  f"(Eclipse {len(eclipse_bugs) if 'eclipse_bugs' in dir() else 0:,} "
-                  f"+ Bugzilla {len(bugzilla_bugs):,})")
+                  f"(Eclipse {len(eclipse_bugs):,} + Bugzilla {len(bugzilla_bugs):,})")
         else:
             print("[Router] Warning: no NLP context loaded — accuracy may be reduced.")
 
@@ -137,7 +142,12 @@ class Router:
         print(f"[Router] Training on {len(combined_history):,} bugs total "
               f"| Candidate pool: {len(project_developers)} developers from {repo}")
 
-        self._assigner.fit(combined_history, project_developers, project_resolutions)
+        self._assigner.fit(
+            combined_history,
+            project_developers,
+            project_resolutions,
+            n_context=len(context_bugs),  # cache the offline bugs, encode GitHub bugs fresh
+        )
         self._trained = True
 
     def train_from_csv(self, filepath: str | Path = _ECLIPSE_CSV) -> None:
@@ -155,9 +165,13 @@ class Router:
         developers, resolutions = build_developers(dev_stats)
         self._project_developers = developers
 
-        # Load Bugzilla as additional NLP context
-        print("[Router] Loading Bugzilla corpus for extra NLP context...")
-        bugzilla_bugs, _ = bugzilla_loader.load(_BUGZILLA_TXT)
+        # Load Bugzilla as additional NLP context (optional)
+        if self._use_bugzilla:
+            print("[Router] Loading Bugzilla corpus for extra NLP context...")
+            bugzilla_bugs, _ = bugzilla_loader.load(_BUGZILLA_TXT)
+        else:
+            print("[Router] Bugzilla corpus skipped (--no-bugzilla flag set).")
+            bugzilla_bugs = []
 
         combined_history = bugzilla_bugs + bugs
 
@@ -165,7 +179,12 @@ class Router:
               f"(Bugzilla context {len(bugzilla_bugs):,} + Eclipse {len(bugs):,}) "
               f"| Candidate pool: {len(developers)} developers")
 
-        self._assigner.fit(combined_history, developers, resolutions)
+        self._assigner.fit(
+            combined_history,
+            developers,
+            resolutions,
+            n_context=len(bugzilla_bugs),  # cache Bugzilla context, Eclipse bugs encoded fresh
+        )
         self._trained = True
 
     # ------------------------------------------------------------------

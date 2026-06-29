@@ -48,6 +48,12 @@ archive.zip
 *.npy
 *.npz
 
+# ── Embedding caches (large binary files — rebuild with scripts/build_cache.py) ─
+models/embeddings_cache_*.pkl
+
+# ── Zip archives ──────────────────────────────────────────────────────────────
+*.zip
+
 # ── Documentation (LaTeX papers & dev journal — kept local) ──────────────────
 documentation/
 docs/

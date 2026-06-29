@@ -93,11 +93,10 @@ def main() -> None:
     devs, resolutions = build_developers(dev_stats)
 
     resolvable = [b for b in bugs if b.id in resolutions]
-    rng = random.Random(args.seed)
-    rng.shuffle(resolvable)
+    resolvable.sort(key=lambda b: getattr(b, "created_at", 0.0))
 
-    test_bugs  = resolvable[:args.test_size]
-    train_bugs = resolvable[args.test_size:]
+    train_bugs = resolvable[:-args.test_size]
+    test_bugs  = resolvable[-args.test_size:]
 
     print(f"\n  Train: {len(train_bugs):,}  |  Test: {len(test_bugs):,}")
 

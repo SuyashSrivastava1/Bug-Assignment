@@ -1,8 +1,8 @@
 {
-  "n_bugs": 10277,
-  "n_candidates": 102221,
-  "n_positive": 10277,
+  "n_bugs": 10249,
+  "n_candidates": 102229,
+  "n_positive": 10249,
   "n_features": 19,
-  "avg_candidates_per_bug": 9.9,
-  "trained_at": "2026-06-03T19:14:48.353071"
+  "avg_candidates_per_bug": 10.0,
+  "trained_at": "2026-06-18T14:13:42.814650"
 }

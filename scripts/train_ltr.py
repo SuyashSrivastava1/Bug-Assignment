@@ -82,12 +82,11 @@ def main() -> None:
     devs, resolutions = build_developers(dev_stats)
 
     resolvable = [b for b in bugs if b.id in resolutions]
-    rng = random.Random(args.seed)
-    rng.shuffle(resolvable)
+    resolvable.sort(key=lambda b: getattr(b, "created_at", 0.0))
 
     n_test    = args.test_size
-    test_bugs  = resolvable[:n_test]
-    train_bugs = resolvable[n_test:]
+    train_bugs = resolvable[:-n_test]
+    test_bugs  = resolvable[-n_test:]
     print(f"  Train: {len(train_bugs):,} bugs  |  Test (held out): {len(test_bugs):,} bugs")
 
     # 2. Fit the base assigner on training data

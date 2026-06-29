@@ -20,7 +20,7 @@ class Bug:
     vector      : TF-IDF feature vector populated by BugAssigner at inference time.
     """
 
-    __slots__ = ("id", "description", "severity", "module", "vector")
+    __slots__ = ("id", "description", "severity", "module", "vector", "created_at")
 
     def __init__(
         self,
@@ -28,11 +28,13 @@ class Bug:
         description: str,
         severity: str,
         module: str,
+        created_at: float = 0.0,
     ) -> None:
         self.id: int | str = id
         self.description: str = description
         self.severity: str = severity.lower()
         self.module: str = module
+        self.created_at: float = created_at
         self.vector = None  # Populated by BugAssigner at fit/inference time
 
     def __repr__(self) -> str:

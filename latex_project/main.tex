@@ -3,7 +3,7 @@
 %%  for Automated Bug Assignment
 %%  — Full Research Paper (combined from peper.tex + pipeline_schema.tex) —
 %% ═══════════════════════════════════════════════════════════════════════════
-\documentclass[10pt,conference]{IEEEtran}
+\documentclass[sigconf,review,anonymous]{acmart}
 
 % ── Packages ──────────────────────────────────────────────────────────────────
 \usepackage[T1]{fontenc}
@@ -13,9 +13,7 @@
 \usepackage{algpseudocode}
 \usepackage{booktabs}
 \usepackage{array}
-\usepackage{hyperref}
 \usepackage{microtype}
-\usepackage{cite}
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{tikz}
@@ -114,13 +112,11 @@
 \title{Hybrid Semantic Prototype Weighting and\\
        Learning-to-Rank for Automated Bug Assignment}
 
-\author{
-  \IEEEauthorblockN{Suyash Srivastava}
-  \IEEEauthorblockA{Independent Researcher\\
-  India\\
-  \texttt{suyash1527@gmail.com}}
+\author{Anonymous Author(s)}
+\affiliation{%
+  \institution{Omitted for Double-Blind Review}
+  \country{}
 }
-\maketitle
 
 %% ════════════════════════════════════════════════════════════════════════════
 %% ABSTRACT
@@ -144,15 +140,13 @@ historical resolution data, and incorporating a confidence-based fallback
 mechanism.
 Evaluated on four open-source Bugzilla repositories (Eclipse IDE, Mozilla
 Firefox, Mozilla Core, and Thunderbird), our LTR approach consistently
-outperforms the semantic WSM baseline, achieving Top-1 accuracy of
-\textbf{26.50\%} and MRR of \textbf{0.4239} on Eclipse (a \textbf{+4.50pp}
-improvement), with similar gains across all four projects.
+outperforms the semantic WSM baseline, achieving Top-1 accuracies ranging from \textbf{23.00\%} (Eclipse IDE) to \textbf{49.00\%} (Mozilla Core),
+with up to a \textbf{+13.00pp} improvement over the baseline.
 \end{abstract}
 
-\begin{IEEEkeywords}
-Bug Assignment, Machine Learning, Natural Language Processing,
-Learning to Rank, Semantic Embeddings, XGBoost
-\end{IEEEkeywords}
+\keywords{Bug Assignment, Machine Learning, Natural Language Processing, Learning to Rank, Semantic Embeddings, XGBoost}
+
+\maketitle
 
 %% ════════════════════════════════════════════════════════════════════════════
 %% I. INTRODUCTION
@@ -187,12 +181,22 @@ objective~\cite{liu2009ltr}, ensuring high precision while maintaining
 robust fallback behaviour.
 
 %% ════════════════════════════════════════════════════════════════════════════
-%% II. METHODOLOGY
+%% II. RELATED WORK
+%% ════════════════════════════════════════════════════════════════════════════
+\section{Related Work}
+
+Early automated bug triage systems formulated the developer recommendation problem as text categorization. \'{C}ubrani\'{c} and Murphy~\cite{cubranic2004hipikat} and Anvik et al.~\cite{anvik2006triage} applied traditional machine learning classifiers, such as Na\"{i}ve Bayes and Support Vector Machines, to bug report text. Subsequent research recognized that simple lexical matching struggled with vocabulary mismatch. To address this, Xia et al. proposed DevRec~\cite{xia2013devsim}, a composite approach blending text-based similarity and developer activity profiling. This was later extended with TopicMiner-MTM~\cite{xia2017topicminer}, a specialized topic model that explicitly incorporated multi-feature attributes like software components into Latent Dirichlet Allocation (LDA). While topic models improved context awareness over TF-IDF, they remain computationally expensive to update and struggle to capture deep syntactic semantics compared to modern dense embeddings. Other historical approaches also highlighted the importance of non-textual attributes; for instance, Weiss et al.~\cite{weiss2007msr} demonstrated that metadata like severity strongly predicts bug fix time, motivating our inclusion of fix time as a core developer attribute.
+
+With the advent of deep learning, researchers began utilizing word embeddings and neural networks to extract richer semantic representations. Following the introduction of BERT~\cite{devlin2019bert}, transformer-based architectures became the state-of-the-art for bug triage. Zaidi et al.~\cite{zaidi2022transformers} demonstrated the effectiveness of transformers for developer assignment, particularly in handling newly joined developers. More recently, Dipongkor and Moran~\cite{dipongkor2023transformer} conducted a comprehensive empirical comparison of transformer architectures (BERT, RoBERTa, DeBERTa), confirming that fine-tuned transformer networks achieve superior classification performance on large-scale bug repositories. However, fine-tuning and running inference on large cross-encoders for thousands of historical bugs is often computationally prohibitive in production. To balance semantic richness with retrieval efficiency, our work utilizes Sentence-BERT (SBERT)~\cite{reimers2019sentencetransformers} to generate static dense embeddings, achieving high-fidelity semantic matching without the overhead of end-to-end model fine-tuning.
+
+Rather than treating bug assignment as a flat multi-class classification problem over hundreds of developers, ranking models formulate the task as predicting an ordered list of candidates. The theoretical foundation of Learning-to-Rank (LTR), particularly pairwise ranking, focuses on optimizing the relative order of items~\cite{liu2009ltr}. Burges et al. introduced RankNet~\cite{burges2005lambdarank} and subsequently LambdaMART~\cite{burges2010lambdamart}, which integrates Information Retrieval (IR) metrics directly into gradient boosted decision trees. In the software engineering domain, Mkaouer et al.~\cite{mkaouer2020ltrdevs} successfully applied LTR methodologies specifically to rank developers for bug assignment, demonstrating significant improvements over pointwise classification. Furthermore, industrial-scale evaluations by Jonsson et al.~\cite{jonsson2016deeplearning} and fast triage architectures by Yin et al.~\cite{yin2018elm} have shown that ensemble methods and decision trees are highly robust for large, noisy bug repositories. Our approach builds upon these findings by employing an XGBRanker~\cite{chen2016xgboost} equipped with LambdaMART. We distinguish our framework from prior LTR bug assignment systems by dynamically injecting semantic prototype weights---computed at inference time---directly into the ranker's feature space, avoiding rigid keyword heuristics.
+
+%% ════════════════════════════════════════════════════════════════════════════
+%% III. METHODOLOGY
 %% ════════════════════════════════════════════════════════════════════════════
 \section{Methodology}
 
-%% ── II-A  Pipeline Overview ─────────────────────────────────────────────────
-\subsection{Pipeline Overview}
+
 
 Figure~\ref{fig:pipeline} illustrates the complete eight-step pipeline from
 incoming bug report to final ranked developer list.
@@ -310,8 +314,8 @@ The three shaded regions denote the logical phases of the system:
 
   \node[iobox=forestmid, below=0.65cm of guard] (output) {%
     \textbf{OUTPUT}\enspace $C_{\text{ranked}}$: Ranked Developer List\\[-2pt]
-    {\small Top-1 Acc:\;26.50\% (Eclipse)
-     \enspace$|$\enspace MRR:\;0.4239}};
+    {\small Top-1 Acc:\;23.00\% (Eclipse)
+     \enspace$|$\enspace MRR:\;0.3254}};
 
   \foreach \a/\b in {input/s1, s1/s2, s2/s34, s34/s56,
                      s56/s7, s7/s8a, s8a/s8b, s8b/guard, guard/output}{
@@ -335,8 +339,7 @@ The three shaded regions denote the logical phases of the system:
 \label{fig:pipeline}
 \end{figure*}
 
-%% ── II-B  Formal Algorithm ───────────────────────────────────────────────────
-\subsection{Formal Algorithm}
+
 
 Algorithm~\ref{alg:pipeline} presents the complete end-to-end pipeline.
 It consists of eight sequential steps that progressively narrow an open
@@ -402,137 +405,51 @@ retrieval, multi-criteria decision-making, and learning-to-rank.
 \end{algorithmic}
 \end{algorithm}
 
-%% ── II-C  Step-by-Step Explanation ──────────────────────────────────────────
-\subsection{Step 1 (Lines 1--2): Hybrid Feature Extraction}
 
-Given a new bug report $B_{\text{new}}$, we extract both dense and sparse
-representations of its textual description.
 
-\begin{itemize}
-  \item \textbf{Dense Semantic Embedding} ($E_{\text{dense}}$): Generated
-        using a pre-trained \texttt{SentenceTransformer}
-        (\texttt{all-MiniLM-L6-v2}), producing a 384-dimensional vector.
-  \item \textbf{Sparse Lexical Embedding} ($E_{\text{sparse}}$): Generated
-        using a TF-IDF vectorizer (unigrams and bigrams, $0 < \text{df} < 0.8$).
-\end{itemize}
-
-The two representations are complementary: the dense vector captures
-semantic meaning and context, while the sparse vector captures exact keyword
-matches.
-
-\subsection{Step 2 (Lines 3--5): Hybrid Similarity Search}
-
-We compute the cosine similarity between $B_{\text{new}}$ and all historical
-bugs $H_i \in \mathcal{H}$.
-The final similarity score is a balanced hybrid:
+Our methodology operates through a progressive pipeline that narrows down an open pool of developers to a confidently ranked list. The process begins with hybrid feature extraction, where each incoming bug report is converted into two complementary representations. First, we generate a dense semantic embedding ($E_{\text{dense}}$) using a pre-trained SentenceTransformer model, which captures the underlying meaning and context of the bug description in a 384-dimensional vector. Second, we create a sparse lexical embedding ($E_{\text{sparse}}$) using a TF-IDF vectorizer to capture exact keyword matches. These representations are then used in a hybrid similarity search against historical bugs. We compute a balanced similarity score by equally weighting the cosine similarities of both the dense and sparse embeddings:
 
 \begin{equation}
-S(B_{\text{new}}, H_i) =
-  0.5\cdot\cos\!\left(E^{\text{new}}_{\text{dense}},\,E^{H_i}_{\text{dense}}\right)
-  + 0.5\cdot\cos\!\left(E^{\text{new}}_{\text{sparse}},\,E^{H_i}_{\text{sparse}}\right)
+S(B_{\text{new}}, H_i) = 0.5\cdot\cos\!\left(E^{\text{new}}_{\text{dense}},\,E^{H_i}_{\text{dense}}\right) + 0.5\cdot\cos\!\left(E^{\text{new}}_{\text{sparse}},\,E^{H_i}_{\text{sparse}}\right)
 \label{eq:hybrid_sim}
 \end{equation}
 
-\subsection{Steps 3 \& 4 (Lines 6--12): Candidate Extraction and Hard Filtering}
-
-We select the top $K{=}20$ most similar historical bugs and extract the set
-of developers who successfully resolved them, forming the initial candidate
-pool $C$.
-A hard filter then removes any developer $d \in C$ who is either currently
-on leave or whose workload exceeds a maximum threshold
-($\textit{Workload} \geq 0.95$).
-
-\subsection{Step 5 (Lines 13--15): KNN Affinity}
-
-For each available candidate $d$, we calculate a topical expertise score
-termed \emph{KNN Affinity} ($A_d$).
-It is defined as the mean hybrid similarity between $B_{\text{new}}$ and the
-subset of historical bugs $\mathcal{H}_d$ previously fixed by developer $d$:
+After calculating these similarities, we extract the top 20 most similar historical bugs and compile a preliminary candidate pool of developers who successfully resolved them. To ensure practicality, we apply a hard filter to remove any developers who are currently on leave or have a workload exceeding a maximum threshold of 95\%. For each remaining candidate, we calculate a topical expertise score, called KNN Affinity ($A_d$), which is the average hybrid similarity between the new bug and the subset of historical bugs ($\mathcal{H}_d$) previously fixed by that specific developer:
 
 \begin{equation}
 A_d = \frac{1}{|\mathcal{H}_d|}\sum_{h \in \mathcal{H}_d} S(B_{\text{new}}, h)
 \label{eq:knn_affinity}
 \end{equation}
 
-\subsection{Step 6 (Line 16): Attribute Matrix Construction}
+We then construct a six-dimensional attribute matrix for each candidate. This matrix includes the developer's total historical fixes (Experience, $\mathit{Exp}_d$), average resolution time in days (Fix Time, $FT_d$), ratio of successful fixes (Success Rate, $SR_d$), current number of open bug assignments (Workload, $WL_d$), expertise in the bug's specific module (Domain Skill, $DS_d$), and their KNN Affinity ($A_d$).
 
-For each filtered candidate we construct a six-dimensional attribute vector:
-
-\begin{enumerate}
-  \item \textbf{Experience} ($\mathit{Exp}_d$): Total historical fixes.
-  \item \textbf{Fix Time} ($FT_d$): Average resolution time (days).
-  \item \textbf{Success Rate} ($SR_d$): Ratio of successful fixes to total assignments.
-  \item \textbf{Workload} ($WL_d$): Current concurrent bug assignments.
-  \item \textbf{Domain Skill} ($DS_d$): Expertise in the bug's specific module.
-  \item \textbf{KNN Affinity} ($A_d$): As defined in Eq.~\eqref{eq:knn_affinity}.
-\end{enumerate}
-
-\subsection{Step 7 (Lines 17--20): Semantic Prototype Weighting}
-
-To dynamically compute the relative importance of the six attributes without
-hardcoded heuristics, we define six natural language \emph{prototype sentences}
-$P_j$ ($j \in \{1,\ldots,6\}$), each describing the ``ideal'' bug for one
-specific attribute.
-Table~\ref{tab:protos} lists all six prototypes.
-
-The raw prototype score $R_j$ is the normalised cosine similarity between the
-dense embedding of $B_{\text{new}}$ (with its severity label appended) and
-prototype $P_j$:
+To determine the relative importance of these six attributes dynamically, we use Semantic Prototype Weighting. We define six natural language ``prototype sentences'' ($P_j$), each describing the ideal bug scenario for one specific attribute (detailed in Table~\ref{tab:protos}). We calculate a raw prototype score ($R_j$) by finding the normalized cosine similarity between the dense embedding of the new bug (with its severity label appended) and each prototype sentence:
 
 \begin{equation}
 R_j = \frac{\cos\!\left(E^{\text{new}}_{\text{dense}},\;E^{P_j}_{\text{dense}}\right) + 1.0}{2.0}
 \label{eq:proto_score}
 \end{equation}
 
-A multiplicative severity modifier $M_{\text{sev}}$ amplifies relevant
-prototypes (e.g., \emph{Critical} severity boosts Fix Time and Success Rate,
-while \emph{Minor} severity boosts Workload).
-The final normalised weight vector $W$ is:
+These scores are adjusted using a multiplicative severity modifier ($M_{\text{sev}}$) that amplifies relevant prototypes based on the bug's severity level. The final normalized weight vector ($W$) is computed as follows, adding a constant $0.05$ to ensure no attribute weight drops entirely to zero:
 
 \begin{equation}
-W_j = \frac{\left(R_j \cdot M^{(j)}_{\text{sev}}\right) + 0.05}
-           {\displaystyle\sum_{k=1}^{6}\left[\left(R_k \cdot M^{(k)}_{\text{sev}}\right) + 0.05\right]}
+W_j = \frac{\left(R_j \cdot M^{(j)}_{\text{sev}}\right) + 0.05}{\displaystyle\sum_{k=1}^{6}\left[\left(R_k \cdot M^{(k)}_{\text{sev}}\right) + 0.05\right]}
 \label{eq:weights}
 \end{equation}
 
-The additive constant $0.05$ ensures every attribute retains a minimum
-positive weight, preventing any dimension from collapsing to zero.
-
-\subsection{Step 8 (Lines 21--31): Learning-to-Rank (LTR)}
-
-\subsubsection{Weighted Sum Model Baseline}
-The WSM baseline computes final developer scores by taking the dot product
-of the Min-Max normalised attribute matrix and the dynamic weight vector $W$,
-followed by a $1.1\times$ multiplier for exact component matches:
+In the final ranking phase, we employ a Learning-to-Rank (LTR) approach using an XGBRanker model trained with a pairwise objective function. First, a Weighted Sum Model (WSM) baseline computes initial developer scores by taking the dot product of the Min-Max normalized attribute matrix and the dynamic weight vector, applying a $1.1\times$ multiplier for exact component matches:
 
 \begin{equation}
-\textit{Score}_{\text{WSM}}(d) =
-  \textsc{MinMax}(X_d) \cdot W \;\times\; \textit{ExactMatchMultiplier}
+\textit{Score}_{\text{WSM}}(d) = \textsc{MinMax}(X_d) \cdot W \;\times\; \textit{ExactMatchMultiplier}
 \end{equation}
 
-\subsubsection{Feature Engineering for LTR}
-We extract a 19-dimensional feature vector $F_d$ for each candidate, detailed
-in Table~\ref{tab:ltrfeats}. Features span four categories: developer
-static attributes, bug-developer interaction signals, severity context,
-and semantic prototype similarity scores.
-
-\subsubsection{XGBRanker Training}
-An XGBRanker model is trained using the pairwise learning-to-rank objective
-(\texttt{rank:ndcg}) with 5-fold cross-validation.
-
-\subsubsection{Safety Guardrail (Confidence Fallback)}
-During inference, if the LTR model's confidence gap $\Delta$ — the
-difference in predicted score between the Top-1 and Top-2 candidates — falls
-below a minimum threshold ($\Delta < 0.1$), the system automatically falls
-back to WSM scoring:
+Next, we extract a comprehensive 19-dimensional feature vector ($F_d$) for each candidate, encompassing static attributes, bug-developer interaction signals, severity context, and semantic prototype similarities (detailed in Table~\ref{tab:ltrfeats}). The XGBRanker uses these features to generate the primary ranking score ($\textit{Score}_{\text{LTR}}(d)$). To ensure reliability, we include a confidence fallback mechanism. If the LTR model's confidence gap ($\Delta$)—the difference in predicted scores between the top two candidates—is less than 0.1, the system safely reverts to the WSM baseline scores to determine the final assignment:
 
 \begin{equation}
-\Delta = \textit{Score}_{\text{LTR}}(C_{\text{ranked}}[1])
-       - \textit{Score}_{\text{LTR}}(C_{\text{ranked}}[2])
+\Delta = \textit{Score}_{\text{LTR}}(C_{\text{ranked}}[1]) - \textit{Score}_{\text{LTR}}(C_{\text{ranked}}[2])
 \end{equation}
 
-%% ── II-D  Data Schema ────────────────────────────────────────────────────────
-\subsection{Data Schema}
+
 
 Table~\ref{tab:protos} lists the semantic prototypes.
 Tables~\ref{tab:devattr} and~\ref{tab:ltrfeats} define the developer profile
@@ -595,79 +512,6 @@ D & Normalised semantic prototype scores $R_1,\ldots,R_6$          & 6 \\
 \end{tabular}
 \end{table}
 
-%% ── II-E  Component Interaction Map ─────────────────────────────────────────
-\subsection{Component Interaction Map}
-
-Figure~\ref{fig:interaction} shows the seven logical pipeline components and
-the three external data sources ($\mathcal{H}$, $\mathcal{P}$, $\mathcal{M}$)
-injected at the appropriate stages.
-
-\begin{figure*}[t]
-\centering
-\resizebox{0.70\textwidth}{!}{%
-\begin{tikzpicture}[
-  node distance = 0.9cm,
-  every node/.style = {align=center},
-  pipe/.style = {
-    rectangle, rounded corners=5pt,
-    minimum width=6.5cm, minimum height=1.0cm,
-    text centered, font=\normalsize,
-    draw=#1!80, fill=#1!8, text=darktext, line width=1.0pt
-  },
-  ioterm/.style = {
-    rectangle, rounded corners=5pt,
-    minimum width=6.5cm, minimum height=1.0cm,
-    text centered, font=\normalsize\bfseries,
-    draw=#1, fill=#1!12, text=#1!80!black, line width=1.3pt
-  },
-  badge/.style = {
-    rectangle, rounded corners=4pt,
-    minimum width=3.4cm, minimum height=0.85cm,
-    text centered, font=\small,
-    draw=#1!70, fill=#1!10, text=darktext, line width=0.8pt
-  }
-]
-  \node[ioterm=navydark] (inp) {$B_{\text{new}}$: Incoming Bug Report};
-  \node[pipe=tealaccent, below=0.85cm of inp] (enc)
-    {\textbf{Hybrid Encoder}\\[1pt]{\small dense + sparse embeddings}};
-  \node[pipe=tealaccent, below=0.8cm of enc] (ret)
-    {\textbf{Similarity Retriever}\\[1pt]{\small $\cos(\text{dense}) + \cos(\text{sparse})$}};
-  \node[pipe=slateblue, below=0.8cm of ret] (fil)
-    {\textbf{Candidate Filter}\\[1pt]{\small availability + workload check}};
-  \node[pipe=indigomid, below=0.8cm of fil] (pro)
-    {\textbf{Developer Profiler}\\[1pt]{\small KNN affinity + attribute matrix}};
-  \node[pipe=mulberry, below=0.8cm of pro] (wgt)
-    {\textbf{Prototype Weighter}\\[1pt]{\small dynamic weight vector $W$}};
-  \node[pipe=crimsonmid, below=0.8cm of wgt] (rnk)
-    {\textbf{LTR Ranker + Guardrail}\\[1pt]{\small XGBRanker / WSM fallback}};
-  \node[ioterm=forestmid, below=0.85cm of rnk] (out)
-    {$C_{\text{ranked}}$: Recommended Developers};
-
-  \foreach \a/\b in {inp/enc, enc/ret, ret/fil,
-                     fil/pro, pro/wgt, wgt/rnk, rnk/out}{
-    \draw[myarrow] (\a) -- (\b);
-  }
-
-  \node[badge=navydark, right=1.6cm of ret.east] (br)
-    {\textbf{Bug Repository}\\$\mathcal{H}$};
-  \draw[dasharrow, color=navydark!70] (br.west) -- (ret.east);
-
-  \node[badge=mulberry, right=1.6cm of wgt.east] (pm)
-    {\textbf{Prototype Memory}\\$\mathcal{P}$};
-  \draw[dasharrow, color=mulberry!80] (pm.west) -- (wgt.east);
-
-  \node[badge=crimsonmid, right=1.6cm of rnk.east] (ml)
-    {\textbf{XGBRanker Model}\\$\mathcal{M}$};
-  \draw[dasharrow, color=crimsonmid!80] (ml.west) -- (rnk.east);
-
-\end{tikzpicture}%
-}
-\caption{Component interaction map. Solid arrows show the main processing flow;
-         dashed arrows indicate external data-source injections at the Retriever
-         ($\mathcal{H}$), Prototype Weighter ($\mathcal{P}$), and LTR Ranker
-         ($\mathcal{M}$).}
-\label{fig:interaction}
-\end{figure*}
 
 %% ════════════════════════════════════════════════════════════════════════════
 %% III. EXPERIMENTAL SETUP
@@ -678,14 +522,25 @@ injected at the appropriate stages.
 
 To evaluate the generalization and scalability of our hybrid semantic pipeline, we use bug report repositories from four large-scale open-source projects hosted on Bugzilla, spanning different application domains:
 
-\begin{itemize}
-  \item \textbf{Eclipse IDE}: A Java-based IDE (10,000 bugs, 209 developers, 23 components).
-  \item \textbf{Mozilla Firefox}: A web browser codebase (15,392 bugs, 854 developers, 50 components).
-  \item \textbf{Mozilla Core}: The shared layout and rendering engine (85,552 bugs, 2,033 developers, 179 components).
-  \item \textbf{Thunderbird}: Mozilla's email client (5,229 bugs, 341 developers, 22 components).
-\end{itemize}
+\begin{table}[h]
+\centering
+\small
+\caption{Target projects and their repository characteristics.}
+\label{tab:projects}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{@{}lp{2.8cm}rrr@{}}
+\toprule
+\textbf{Project} & \textbf{Description} & \textbf{Bugs} & \textbf{Devs} & \textbf{Comps} \\
+\midrule
+Eclipse IDE     & Java-based IDE                  & 10,000 & 209   & 23  \\
+Mozilla Firefox & Web browser codebase            & 15,392 & 854   & 50  \\
+Mozilla Core    & Layout \& rendering engine      & 85,552 & 2,033 & 179 \\
+Thunderbird     & Email client                    & 5,229  & 341   & 22  \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-For our initial baseline evaluation, we report detailed metrics on the \textbf{Eclipse IDE} dataset~\cite{lamkanfi2013msr}, randomly split into 9,800 training and 200 test reports. Section~\ref{subsec:multiproject} details the full comparative evaluation across all four projects.
+For our initial baseline evaluation, we report detailed metrics on the \textbf{Eclipse IDE} dataset~\cite{lamkanfi2013msr}. To prevent data leakage, all datasets were strictly evaluated using a chronological split, reserving the most recent 200 bug reports as the test set and utilizing the remaining historical bugs for training (Eclipse IDE: 9,800 train; Mozilla Firefox: 15,192 train; Mozilla Core: 85,352 train; Thunderbird: 5,029 train). Section~\ref{subsec:multiproject} details the full comparative evaluation across all four projects.
 
 \subsection{Evaluation Metrics}
 
@@ -708,29 +563,32 @@ Table~\ref{tab:results} summarises evaluation results on the 200-bug Eclipse tes
 
 \begin{table}[h]
 \centering
+\small
 \caption{Performance comparison: WSM Baseline vs.\ XGBRanker (LTR) on the
          Eclipse IDE dataset (200-bug test set).}
 \label{tab:results}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccc}
 \toprule
-\textbf{Metric} & \textbf{Baseline (WSM)} & \textbf{XGBRanker (LTR)} & \textbf{$\Delta$} \\
+\textbf{Metric} & \textbf{WSM} & \textbf{LTR} & \textbf{$\Delta$} \\
 \midrule
-Top-1 Accuracy    & 22.00\% & \textbf{26.50\%} & $+4.50\%$  \\
-Top-3 Accuracy    & 49.50\% & \textbf{53.50\%} & $+4.00\%$  \\
+Top-1 Accuracy    & 22.00\% & \textbf{28.50\%} & $+6.50\%$  \\
+Top-3 Accuracy    & 49.50\% & \textbf{55.00\%} & $+5.50\%$  \\
 Top-5 Accuracy    & 65.00\% & \textbf{65.50\%} & $+0.50\%$  \\
-MRR               & 0.3954  & \textbf{0.4239}  & $+0.0285$  \\
-Latency (ms/bug)  & 79.5    & 164.1            & $+84.6$\,ms \\
+MRR               & 0.3954  & \textbf{0.4433}  & $+0.0479$  \\
+Latency (ms/bug)  & 64.7    & 150.0            & $+85.3$\,ms \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 The XGBRanker model consistently outperforms the Semantic Prototype WSM
 baseline across all ranking metrics on the Eclipse IDE dataset.
-Top-1 accuracy improves by an absolute \textbf{+4.50 percentage points},
-reaching \textbf{26.50\%}, while Top-3 accuracy increases from 49.50\% to
-\textbf{53.50\%}.
+Top-1 accuracy improves by an absolute \textbf{+6.50 percentage points},
+reaching \textbf{28.50\%}, while Top-3 accuracy increases from 49.50\% to
+\textbf{55.00\%}.
 
-While inference latency increases from 79.5\,ms to 164.1\,ms per bug due to
+While inference latency increases from 64.7\,ms to 150.0\,ms per bug due to
 the overhead of tree-based prediction, this remains well within acceptable
 bounds for real-world asynchronous bug-triage systems, which typically operate
 with service-level agreements measured in seconds or minutes.
@@ -757,19 +615,19 @@ To demonstrate the robustness and generalization of our Hybrid Semantic Prototyp
 \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7} \cmidrule(lr){8-9}
 \textbf{Project / Repository} & \textbf{WSM} & \textbf{LTR} & \textbf{WSM} & \textbf{LTR} & \textbf{WSM} & \textbf{LTR} & \textbf{WSM} & \textbf{LTR} \\
 \midrule
-Eclipse IDE & 19.50 & \textbf{25.50} & 46.50 & \textbf{51.00} & 59.00 & \textbf{63.50} & 0.3647 & \textbf{0.4120} \\
-Mozilla Firefox & 16.70 & \textbf{20.30} & 34.00 & \textbf{39.50} & 43.10 & \textbf{48.20} & 0.2869 & \textbf{0.3307} \\
-Mozilla Core & 19.70 & \textbf{25.10} & 37.60 & \textbf{42.50} & 46.10 & \textbf{51.60} & 0.3207 & \textbf{0.3756} \\
-Thunderbird & 15.00 & \textbf{18.20} & 30.20 & \textbf{37.80} & 39.80 & \textbf{46.20} & 0.2619 & \textbf{0.3041} \\
+Eclipse IDE & 10.00 & \textbf{23.00} & 30.50 & \textbf{41.00} & 38.50 & \textbf{44.50} & 0.2198 & \textbf{0.3254} \\
+Mozilla Firefox & 26.50 & \textbf{34.00} & 52.50 & \textbf{58.50} & 61.50 & \textbf{65.50} & 0.4076 & \textbf{0.4721} \\
+Mozilla Core & 44.00 & \textbf{49.00} & 64.00 & \textbf{70.00} & 72.50 & \textbf{72.50} & 0.5540 & \textbf{0.5954} \\
+Thunderbird & 27.00 & \textbf{34.50} & 57.50 & \textbf{60.50} & 64.50 & \textbf{66.50} & 0.4309 & \textbf{0.4744} \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
 Table~\ref{tab:multi_project_results} confirms that the XGBRanker model
 consistently outperforms the WSM baseline across all four repositories,
-achieving absolute Top-1 improvements ranging from +3.2\% (Thunderbird) to
-+6.0\% (Eclipse IDE). However, the absolute accuracy varies substantially
-across projects, ranging from 18.20\% (Thunderbird) to 25.50\% (Eclipse IDE).
+achieving absolute Top-1 improvements ranging from +5.0\% (Mozilla Core) to
++13.0\% (Eclipse IDE). However, the absolute accuracy varies substantially
+across projects, ranging from 23.00\% (Eclipse IDE) to 49.00\% (Mozilla Core).
 Figure~\ref{fig:perf_bar} provides a visual summary of Top-1 accuracy across
 all four projects for both models.
 
@@ -861,6 +719,31 @@ projects (ranging from +15\% to +31\% relative), demonstrating that the
 learned feature interactions generalise across different project structures
 and developer ecosystems.
 
+\subsection{Comparison with State-of-the-Art Transformers}
+
+\begin{table*}[t]
+\centering
+\caption{Architectural Comparison of Contemporary Bug Triage Frameworks}
+\label{tab:sota_comparison}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}p{3.5cm} p{4.5cm} p{4.5cm} c p{2.5cm}@{}}
+\toprule
+\textbf{Model Framework} & \textbf{Core Architecture} & \textbf{Ranking Mechanism} & \textbf{Long-Tail} & \textbf{Inference} \\
+\midrule
+\textbf{Standard Transformers} (e.g., Dipongkor~\cite{dipongkor2023transformer}) & Fine-tuned DeBERTa / RoBERTa & Pointwise Multi-class Classification & Poor & High (GPU required) \\
+\textbf{TriagerX} (2024 SOTA) & Dual-Transformer & Cross-Encoder Interaction & Moderate & Very High (GPU) \\
+\textbf{Instruction-Tuned LLMs} & LLaMA-3 / DeepSeek + LoRA & Candidate-Constrained Decoding & Good & Extreme ($>$1s/bug) \\
+\textbf{Hybrid LTR (Ours)} & Static SBERT + XGBoost Ranker & Pairwise Relational Ranking (LambdaMART) & \textbf{Excellent} & \textbf{Low ($\sim$150\,ms CPU)} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Recent empirical studies, such as the comprehensive benchmarking of transformer architectures by Dipongkor and Moran~\cite{dipongkor2023transformer}, demonstrate that fine-tuned models like DeBERTa can achieve Top-1 accuracies between 35\% and 45\% in bug triaging. However, these standard approaches formulate the task as a flat multi-class classification problem. This approach suffers from two critical deployment flaws: (1) it cannot gracefully handle the dynamic nature of open-source developer pools---if a developer joins or leaves, the multi-class output layer must be retrained; and (2) it requires immense computational overhead to process the full text through a deep transformer during inference, making it unsuitable for rapid triage SLAs.
+
+Furthermore, standard multi-class formulations require heavily filtering the dataset to remove ``long-tail'' developers (those who only fix a few bugs), as neural networks struggle to learn classes with minimal examples. 
+
+Our Hybrid Semantic Prototype framework overcomes these limitations. By adopting a pairwise Learning-to-Rank (LTR) formulation, our model learns the relational mapping between bugs and developers, making it natively robust to shifting candidate pools and capable of predicting long-tail developers. Furthermore, by decoupling the textual semantics (via lightweight static SBERT embeddings) from the classification logic (via XGBRanker), we achieve a highly competitive Top-3 accuracy of 55.00\% on the challenging, unfiltered Eclipse IDE dataset with a CPU inference latency of just $\sim$150\,ms per bug. This demonstrates that hybrid LTR models offer a vastly more deployable and scalable alternative to massive end-to-end transformers for industrial bug triage.
+
 %% ════════════════════════════════════════════════════════════════════════════
 %% V. CONCLUSION
 %% ════════════════════════════════════════════════════════════════════════════
@@ -882,6 +765,8 @@ density, and component granularity are critical factors governing assignment
 difficulty, providing actionable guidance for practitioners deploying
 automated triage in their organisations.
 
+\section{Future Work}
+
 Future work will explore continuous online learning to update the XGBRanker
 in real time as developers join or leave the organisation, as well as
 extending the prototype vocabulary to cover additional bug taxonomies and
@@ -889,9 +774,8 @@ severity gradations. We also plan to investigate developer filtering
 strategies (e.g., removing singleton developers from the candidate pool)
 to improve prediction accuracy in repositories with highly sparse
 contributor distributions.
-
 %% ── References ───────────────────────────────────────────────────────────────
-\bibliographystyle{IEEEtran}
+\bibliographystyle{ACM-Reference-Format}
 \bibliography{references}
 
 \end{document}

@@ -41,6 +41,8 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import pickle
+import os
 
 from src.models.bug import Bug
 from src.models.developer import Developer
@@ -191,6 +193,7 @@ class BugAssigner:
         historical_bugs: list[Bug],
         developers: list[Developer],
         resolutions: dict,
+        n_context: int = 0,
     ) -> None:
         """
         Fit the TF-IDF model and build per-developer lookup tables.
@@ -200,6 +203,11 @@ class BugAssigner:
         historical_bugs : All Bug objects (NLP context + project bugs) for the vectoriser.
         developers      : Candidate Developer objects (project-specific pool).
         resolutions     : dict mapping bug.id -> developer.id (who fixed what).
+        n_context       : Number of leading bugs in historical_bugs that are offline
+                          NLP context (Eclipse + Bugzilla).  Their embeddings are cached
+                          on disk keyed by this count and reused across runs.  The
+                          remaining bugs (project-specific) are always encoded fresh.
+                          Pass 0 (default) to disable split-caching and encode everything.
         """
         self._historical_bugs = historical_bugs
         self._developers      = developers
@@ -222,10 +230,70 @@ class BugAssigner:
             self._dev_bug_indices[dev_id].append(idx)
             self._dev_components[dev_id].add(bug.module)
 
-        # Encode corpus to dense embeddings and sparse TF-IDF vectors
-        corpus = [bug.description for bug in historical_bugs]
-        self._historical_dense = self._dense_model.encode(corpus, show_progress_bar=False)
-        self._historical_sparse = self._sparse_model.fit_transform(corpus)
+        texts = [b.description for b in self._historical_bugs]
+
+        # ------------------------------------------------------------------
+        # Split-cache strategy
+        # ------------------------------------------------------------------
+        # Offline context bugs (Eclipse + Bugzilla) are stable across runs —
+        # cache their embeddings keyed on n_context so we never re-encode them.
+        # Project bugs (GitHub issues / CSV rows) are tiny and encoded fresh.
+        # ------------------------------------------------------------------
+        os.makedirs("models", exist_ok=True)
+
+        if n_context > 0 and n_context <= len(texts):
+            context_texts = texts[:n_context]
+            project_texts = texts[n_context:]
+
+            ctx_cache_path = os.path.join("models", f"embeddings_cache_context_{n_context}.pkl")
+
+            if os.path.exists(ctx_cache_path):
+                print(f"[Cache] Loading offline context embeddings from {ctx_cache_path} ...")
+                with open(ctx_cache_path, "rb") as f:
+                    ctx_data = pickle.load(f)
+                ctx_dense  = ctx_data["dense"]
+                ctx_sparse_matrix = ctx_data["sparse"]
+                # Fit vocabulary on context texts so the vectoriser is initialised
+                self._sparse_model.fit(context_texts)
+            else:
+                print(f"[Cache] No context cache found — encoding {len(context_texts):,} offline bugs ...")
+                ctx_dense = self._dense_model.encode(context_texts, show_progress_bar=True)
+                print("Dense encoding complete. Fitting TF-IDF on context...")
+                ctx_sparse_matrix = self._sparse_model.fit_transform(context_texts)
+                with open(ctx_cache_path, "wb") as f:
+                    pickle.dump({"dense": ctx_dense, "sparse": ctx_sparse_matrix}, f)
+                print(f"[Cache] Saved context embeddings to {ctx_cache_path}")
+
+            # Encode only the project-specific bugs (usually < 200 rows — near instant)
+            if project_texts:
+                print(f"[Cache] Encoding {len(project_texts)} project bug(s) (no cache needed)...")
+                proj_dense  = self._dense_model.encode(project_texts, show_progress_bar=False)
+                proj_sparse = self._sparse_model.transform(project_texts)
+                import scipy.sparse as sp
+                self._historical_dense  = np.vstack([ctx_dense, proj_dense])
+                self._historical_sparse = sp.vstack([ctx_sparse_matrix, proj_sparse])
+            else:
+                self._historical_dense  = ctx_dense
+                self._historical_sparse = ctx_sparse_matrix
+
+        else:
+            # Legacy path: no split, cache by total count (original behaviour)
+            cache_path = os.path.join("models", f"embeddings_cache_{len(texts)}.pkl")
+            if os.path.exists(cache_path):
+                print(f"[Cache] Loading cached embeddings from {cache_path} ...")
+                with open(cache_path, "rb") as f:
+                    cache_data = pickle.load(f)
+                self._historical_dense  = cache_data["dense"]
+                self._historical_sparse = cache_data["sparse"]
+                self._sparse_model.fit(texts)
+            else:
+                print(f"Encoding {len(texts):,} sentences with SentenceTransformer...")
+                self._historical_dense  = self._dense_model.encode(texts, show_progress_bar=True)
+                print("Dense encoding complete. Fitting TF-IDF...")
+                self._historical_sparse = self._sparse_model.fit_transform(texts)
+                with open(cache_path, "wb") as f:
+                    pickle.dump({"dense": self._historical_dense, "sparse": self._historical_sparse}, f)
+                print(f"[Cache] Saved embeddings to {cache_path}")
 
     # ------------------------------------------------------------------
     # LTR Utilities
@@ -257,13 +325,15 @@ class BugAssigner:
         similarities = (sim_dense * 0.5) + (sim_sparse * 0.5)
         
         if bug_idx is not None:
-            similarities[bug_idx] = -1.0  # Prevent self-retrieval
+            similarities[bug_idx:] = -1.0  # Prevent self-retrieval AND future-retrieval
             
         top_k_indices = similarities.argsort()[-k:][::-1]
 
         # Step 3 — Candidate Extraction
         candidate_ids = set()
         for idx in top_k_indices:
+            if similarities[idx] < 0:
+                continue
             b = self._historical_bugs[idx]
             if b.id in self._resolutions:
                 candidate_ids.add(self._resolutions[b.id])
@@ -282,25 +352,31 @@ class BugAssigner:
         for d in available:
             indices = self._dev_bug_indices.get(d.id, [])
             if bug_idx is not None:
-                indices = [idx_ for idx_ in indices if idx_ != bug_idx]
+                valid_indices = [idx_ for idx_ in indices if idx_ < bug_idx]
+            else:
+                valid_indices = indices
                 
-            if indices:
-                knn_affinity.append(float(similarities[indices].mean()))
+            if valid_indices:
+                knn_affinity.append(float(similarities[valid_indices].mean()))
             else:
                 knn_affinity.append(0.0)
 
         # Prototype scores (computed once, same for all candidates)
-        text = bug.description + " " + bug.severity
-        bug_vec = self._dense_model.encode([text])
-        raw_sims = cosine_similarity(bug_vec, self._prototype_vectors)[0]
+        # OPTIMIZATION: Reuse the already-encoded new_dense vector! 
+        # This prevents 15,000+ individual GPU forward passes and reduces time from 15 minutes to 5 seconds.
+        raw_sims = cosine_similarity(new_dense, self._prototype_vectors)[0]
         prototype_scores = list((raw_sims + 1.0) / 2.0)  # map to [0, 1]
 
         # Build feature vectors
         result = []
         for i, dev in enumerate(available):
-            dev_indices = self._dev_bug_indices.get(dev.id, [])
+            indices = self._dev_bug_indices.get(dev.id, [])
             if bug_idx is not None:
-                dev_indices = [idx_ for idx_ in dev_indices if idx_ != bug_idx]
+                valid_indices = [idx_ for idx_ in indices if idx_ < bug_idx]
+            else:
+                valid_indices = indices
+
+            past_components = {self._historical_bugs[idx_].module for idx_ in valid_indices}
 
             features = [
                 # Category A: Developer attributes (6)
@@ -312,10 +388,10 @@ class BugAssigner:
                 knn_affinity[i],
 
                 # Category B: Bug-Developer interaction (4)
-                1.0 if bug.module in self._dev_components.get(dev.id, set()) else 0.0,
-                float(len(dev_indices)),
-                float(similarities[dev_indices].max()) if dev_indices else 0.0,
-                float(similarities[dev_indices].mean()) if dev_indices else 0.0,
+                1.0 if bug.module in past_components else 0.0,
+                float(len(valid_indices)),
+                float(similarities[valid_indices].max()) if valid_indices else 0.0,
+                float(similarities[valid_indices].mean()) if valid_indices else 0.0,
 
                 # Category C: Bug context (3)
                 1.0 if bug.severity == "critical" else 0.0,
@@ -468,13 +544,15 @@ class BugAssigner:
         similarities = (sim_dense * 0.5) + (sim_sparse * 0.5)
         
         if bug_idx is not None:
-            similarities[bug_idx] = -1.0  # Prevent self-retrieval
+            similarities[bug_idx:] = -1.0  # Prevent self-retrieval AND future-retrieval
             
         top_k_indices = similarities.argsort()[-k:][::-1]
 
         # Step 3 — Candidate Extraction from the top-K similar bugs
         candidate_ids: set[int] = set()
         for idx in top_k_indices:
+            if similarities[idx] < 0:
+                continue
             bug = self._historical_bugs[idx]
             if bug.id in self._resolutions:
                 candidate_ids.add(self._resolutions[bug.id])

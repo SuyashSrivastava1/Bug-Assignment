@@ -63,11 +63,17 @@ def load(filepath: str | Path = DEFAULT_CSV_PATH) -> tuple[list[Bug], dict]:
 
             severity  = map_severity(row.get("Severity", "normal"))
             component = (row.get("Component") or "general").strip()
-            fix_time_hours = _parse_fix_time(
+            created_ts, fix_time_hours = _parse_timestamps(
                 row.get("Opened", ""), row.get("Changed", "")
             )
 
-            bugs.append(Bug(id=bug_id, description=summary, severity=severity, module=component))
+            bugs.append(Bug(
+                id=bug_id, 
+                description=summary, 
+                severity=severity, 
+                module=component,
+                created_at=created_ts
+            ))
 
             if assignee not in dev_stats:
                 dev_stats[assignee] = {
@@ -98,16 +104,17 @@ def load(filepath: str | Path = DEFAULT_CSV_PATH) -> tuple[list[Bug], dict]:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _parse_fix_time(
+def _parse_timestamps(
     opened: str,
     changed: str,
     fallback_hours: float = 24.0,
-) -> float:
-    """Return the number of hours elapsed between two timestamp strings."""
+) -> tuple[float, float]:
+    """Return the (created_timestamp, fix_time_hours)."""
     fmt = "%Y-%m-%d %H:%M:%S"
     try:
         t0 = datetime.datetime.strptime(opened.strip(), fmt)
         t1 = datetime.datetime.strptime(changed.strip(), fmt)
-        return max(0.1, (t1 - t0).total_seconds() / 3600.0)
+        fix_time = max(0.1, (t1 - t0).total_seconds() / 3600.0)
+        return (t0.timestamp(), fix_time)
     except (ValueError, AttributeError):
-        return fallback_hours
+        return (0.0, fallback_hours)

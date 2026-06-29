@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py\n"
             "  python main.py --github https://github.com/facebook/react/issues/36469\n"
             "  python main.py --custom\n"
+            "  python main.py --github URL --no-bugzilla   # skip Bugzilla for faster startup\n"
         ),
     )
     group = parser.add_mutually_exclusive_group()
@@ -69,6 +70,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--custom",
         action="store_true",
         help="Enter a plain-text bug description interactively.",
+    )
+    parser.add_argument(
+        "--no-bugzilla",
+        action="store_true",
+        help=(
+            "Skip loading the Bugzilla corpus (203k bugs). "
+            "Makes first-run startup ~20x faster at a small accuracy cost. "
+            "Recommended until the context cache has been built."
+        ),
     )
     return parser
 
@@ -116,7 +126,7 @@ def print_result(best_dev, rankings, weights=None, signals=None) -> None:
 # Mode 1: GitHub URL
 # ---------------------------------------------------------------------------
 
-def run_github_mode(url: str) -> None:
+def run_github_mode(url: str, use_bugzilla: bool = True) -> None:
     print(f"\n{DIVIDER}")
     repo, issue_number = parse_github_issue_url(url)
     if not repo or not issue_number:
@@ -135,7 +145,7 @@ def run_github_mode(url: str) -> None:
     print(f"  {CYAN}Module{RESET}   : {YELLOW}{bug.module}{RESET}")
 
     print(f"\n  {MAGENTA}[2/3]{RESET} Building developer pool from {repo} history...")
-    router = Router()
+    router = Router(use_bugzilla=use_bugzilla)
     try:
         router.train_from_github(repo, limit=100)
     except ValueError as e:
@@ -152,7 +162,7 @@ def run_github_mode(url: str) -> None:
 # Mode 2: Custom bug description
 # ---------------------------------------------------------------------------
 
-def run_custom_mode() -> None:
+def run_custom_mode(use_bugzilla: bool = True) -> None:
     print(f"\n{DIVIDER}")
     print(f"  {CYAN}Using offline Eclipse + Bugzilla datasets for NLP context.{RESET}")
     print("  Type your bug description (press Enter twice to submit):\n  > ", end="", flush=True)
@@ -175,7 +185,7 @@ def run_custom_mode() -> None:
     bug = Bug(id=0, description=description, severity=severity, module="general")
 
     print(f"\n  {MAGENTA}[1/2]{RESET} Loading offline Eclipse + Bugzilla context...")
-    router = Router()
+    router = Router(use_bugzilla=use_bugzilla)
     router.train_from_csv()
 
     print(f"\n  {MAGENTA}[2/2]{RESET} Finding best developer...")
@@ -188,7 +198,7 @@ def run_custom_mode() -> None:
 # Interactive menu
 # ---------------------------------------------------------------------------
 
-def run_interactive() -> None:
+def run_interactive(use_bugzilla: bool = True) -> None:
     print_header()
     while True:
         print(f"\n{DIVIDER}")
@@ -203,9 +213,9 @@ def run_interactive() -> None:
             break
         elif choice == "1":
             url = input(f"\n  Paste a GitHub issue URL:\n  > ").strip()
-            run_github_mode(url)
+            run_github_mode(url, use_bugzilla=use_bugzilla)
         elif choice == "2":
-            run_custom_mode()
+            run_custom_mode(use_bugzilla=use_bugzilla)
         else:
             print(f"  {RED}Please enter 1, 2, or q.{RESET}")
 
@@ -217,15 +227,16 @@ def run_interactive() -> None:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    use_bugzilla = not args.no_bugzilla
 
     if args.github:
         print_header()
-        run_github_mode(args.github)
+        run_github_mode(args.github, use_bugzilla=use_bugzilla)
     elif args.custom:
         print_header()
-        run_custom_mode()
+        run_custom_mode(use_bugzilla=use_bugzilla)
     else:
-        run_interactive()
+        run_interactive(use_bugzilla=use_bugzilla)
 
 
 if __name__ == "__main__":

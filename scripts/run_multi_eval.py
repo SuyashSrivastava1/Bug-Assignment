@@ -42,13 +42,16 @@ PROJECTS = [
     },
 ]
 
-def run_command(cmd: list[str]) -> str:
-    print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def run_command(cmd: list[str], capture: bool = True) -> str:
+    print(f"Running: {' '.join(cmd)}", flush=True)
+    if capture:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    else:
+        result = subprocess.run(cmd, text=True)
     if result.returncode != 0:
-        print(f"Error running command:\n{result.stderr}")
+        print(f"Error running command:\n{result.stderr if capture else 'Check logs above'}")
         sys.exit(1)
-    return result.stdout
+    return result.stdout if capture else ""
 
 def parse_metrics(output: str) -> dict:
     """Parse the stdout of compare_models.py to extract metrics."""
@@ -96,7 +99,7 @@ def main():
             "--test-size", str(test_size),
             "--skip-cv-gate"
         ]
-        run_command(train_cmd)
+        run_command(train_cmd, capture=False)
         
         # 2. Evaluate Model
         eval_cmd = [
@@ -105,7 +108,7 @@ def main():
             "--model-path", model_path,
             "--test-size", str(test_size)
         ]
-        eval_output = run_command(eval_cmd)
+        eval_output = run_command(eval_cmd, capture=True)
         metrics = parse_metrics(eval_output)
         
         results[name] = metrics
